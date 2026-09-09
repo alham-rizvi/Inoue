@@ -322,6 +322,10 @@ def main(
     fast: bool = typer.Option(False, "--fast", help="Fast scan preset (headers + tech)"),
     full_recon: bool = typer.Option(False, "--full-recon", help="Full recon preset"),
     all_modules: bool = typer.Option(False, "--all", help="Enable all recon modules"),
+    smart: bool = typer.Option(False, "--smart", help="Enable smart detection heuristics and broader matching"),
+    active: bool = typer.Option(False, "--active", help="Enable active reconnaissance checks such as directories and common ports"),
+    passive: bool = typer.Option(False, "--passive", help="Enable passive recon sources such as crt.sh and public intel"),
+    company: bool = typer.Option(False, "--company", help="Collect site and company metadata alongside recon results"),
 ):
     """
     Inoue — tech stack fingerprinting CLI
@@ -344,7 +348,7 @@ def main(
     if not no_banner and not json_out:
         print_banner()
 
-    if any([service, headers, dns, ssl, whois, subdomains, mail, ports, extra, fast, full_recon, all_modules]) and modules is None:
+    if any([service, headers, dns, ssl, whois, subdomains, mail, ports, extra, fast, full_recon, all_modules, smart, active, passive, company]) and modules is None:
         modules = []
     if modules is not None:
         modules = [m.lower() for m in modules]
@@ -375,6 +379,14 @@ def main(
         modules.append("full-recon")
     if all_modules:
         modules.append("all")
+    if smart:
+        modules.append("smart")
+    if active:
+        modules.append("active")
+    if passive:
+        modules.append("passive")
+    if company:
+        modules.append("company")
 
     if modules == []:
         modules = None

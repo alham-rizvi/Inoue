@@ -1,6 +1,6 @@
 [project]
 name = "inoue"
-version = "1.0.1"
+version = "1.1.0"
 description = "Inoue — fast tech stack fingerprinting CLI"
 authors = ["Alham Rizvi <https://github.com/alhamrizvi-cloud/Inoue>"]
 requires-python = ">=3.10"

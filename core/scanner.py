@@ -232,6 +232,29 @@ def _resolve_ip(hostname: str) -> str:
         return ""
 
 
+SMART_TOKENS = {
+    "hs-scripts": "HubSpot",
+    "hubspot": "HubSpot",
+    "googletagmanager": "Google Tag Manager",
+    "google-analytics": "Google Analytics",
+    "gtag": "Google Analytics",
+    "stripe": "Stripe",
+    "mailchimp": "Mailchimp",
+    "hotjar": "Hotjar",
+    "mixpanel": "Mixpanel",
+    "segment": "Segment",
+    "facebook": "Meta Pixel",
+    "pinterest": "Pinterest",
+    "sentry": "Sentry",
+    "shopify": "Shopify",
+    "wp-admin": "WordPress",
+    "phpmyadmin": "phpMyAdmin",
+    "jenkins": "Jenkins",
+    "grafana": "Grafana",
+    "kibana": "Kibana",
+}
+
+
 def build_recon_plan(requested: Optional[list[str]] = None) -> dict:
     modules = {
         "headers": False,
@@ -243,9 +266,13 @@ def build_recon_plan(requested: Optional[list[str]] = None) -> dict:
         "tech": False,
         "ports": False,
         "extra": False,
+        "smart": False,
+        "active": False,
+        "passive": False,
+        "company": False,
     }
     if not requested:
-        modules.update({"headers": True, "tech": True})
+        modules.update({"headers": True, "tech": True, "smart": True})
         return modules
 
     selected = set()
@@ -254,8 +281,28 @@ def build_recon_plan(requested: Optional[list[str]] = None) -> dict:
 
     full_recon = "full-recon" in selected or "full_recon" in selected or "all" in selected
     fast_scan = "fast" in selected or "fast-scan" in selected or "fast_scan" in selected
+    smart_scan = "smart" in selected or "smart-detect" in selected or "smart_detect" in selected
+    active_recon = "active" in selected or "active-recon" in selected or "active_recon" in selected
+    passive_recon = "passive" in selected or "passive-recon" in selected or "passive_recon" in selected
+    company_intel = "company" in selected or "site" in selected or "organization" in selected
+
     for key in modules:
         modules[key] = full_recon or key in selected
+
+    if smart_scan:
+        modules["smart"] = True
+    if active_recon:
+        modules["active"] = True
+        modules["subdomains"] = True
+        modules["ports"] = True
+        modules["extra"] = True
+    if passive_recon:
+        modules["passive"] = True
+        modules["subdomains"] = True
+        modules["extra"] = True
+    if company_intel:
+        modules["company"] = True
+        modules["extra"] = True
 
     if fast_scan:
         modules.update({
@@ -268,6 +315,7 @@ def build_recon_plan(requested: Optional[list[str]] = None) -> dict:
             "tech": True,
             "ports": False,
             "extra": False,
+            "smart": True,
         })
 
     if "intel" in selected:
@@ -283,6 +331,10 @@ def build_recon_plan(requested: Optional[list[str]] = None) -> dict:
             "tech": True,
             "ports": True,
             "extra": True,
+            "smart": True,
+            "active": True,
+            "passive": True,
+            "company": True,
         })
     return modules
 
@@ -514,6 +566,32 @@ def _scan_common_ports(hostname: str, timeout: int = 1) -> list[dict]:
     return open_ports
 
 
+def _collect_company_intel(hostname: str, body: str = "", headers: Optional[dict] = None) -> dict:
+    intel = {}
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(body, "html.parser")
+        title = (soup.title.get_text(" ", strip=True) if soup.title else "") or ""
+        if title:
+            intel["title"] = title
+        meta_description = soup.find("meta", attrs={"name": re.compile(r"description", re.I)})
+        if meta_description and meta_description.get("content"):
+            intel["meta_description"] = meta_description.get("content")
+        canonical = soup.find("link", rel=lambda value: value and "canonical" in value.lower())
+        if canonical and canonical.get("href"):
+            intel["canonical"] = canonical.get("href")
+    except Exception:
+        pass
+
+    if hostname:
+        intel["hostname"] = hostname
+    if headers:
+        server = headers.get("server") or headers.get("Server")
+        if server:
+            intel["server"] = server
+    return intel
+
+
 def build_service_summary(result: ScanResult) -> list[dict]:
     summary = []
     for tech in result.technologies:
@@ -624,10 +702,20 @@ def _collect_candidate_signatures(
     for script_src in scripts:
         for token in _tokenize_text(script_src):
             candidates.update(SIGNATURES_BY_SCRIPT_TOKEN.get(token, []))
+        lower_src = script_src.lower()
+        for token, tech_name in SMART_TOKENS.items():
+            if token in lower_src:
+                candidates.add(tech_name)
     for token in _tokenize_text(body):
         candidates.update(SIGNATURES_BY_HTML_TOKEN.get(token, []))
+        for smart_token, tech_name in SMART_TOKENS.items():
+            if smart_token in token:
+                candidates.add(tech_name)
     for token in _tokenize_text(path):
         candidates.update(SIGNATURES_BY_PATH_TOKEN.get(token, []))
+        for smart_token, tech_name in SMART_TOKENS.items():
+            if smart_token in token:
+                candidates.add(tech_name)
 
     return candidates
 
@@ -912,5 +1000,11 @@ def scan(
         external = _enrich_with_external_services(hostname, [tech.name for tech in result.technologies], api_key)
         if external:
             result.enriched.update(external)
+
+    company_intel = _collect_company_intel(hostname, body, result.headers)
+    if company_intel:
+        result.extra_intel.setdefault("company", {})
+        result.extra_intel["company"].update(company_intel)
+        result.enriched.setdefault("company", company_intel)
 
     return result
