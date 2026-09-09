@@ -4,7 +4,7 @@
 
 This project follows a lightweight semantic versioning policy for CLI releases:
 
-- Stable release tags are in the form `vX.Y.Z`.
+- Stable release tags are in the form `v1.1.0`.
 - The current supported release is the latest tag on the default branch.
 - Only the latest minor release receives active fixes and security review.
 
