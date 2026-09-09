@@ -678,10 +678,14 @@ def _deserialize_scan_result(payload: dict) -> ScanResult:
     return result
 
 
-def _correlate_detection_cves(detections: list[Detection], dataset_path: Optional[str] = None) -> None:
+def _correlate_detection_cves(
+    detections: list[Detection],
+    dataset_path: Optional[str] = None,
+    min_severity: Optional[str] = None,
+) -> None:
     dataset = load_cve_dataset(dataset_path)
     for detection in detections:
-        detection.cves = correlate_cves(detection.name, detection.version, dataset)
+        detection.cves = correlate_cves(detection.name, detection.version, dataset, min_severity)
 
 
 async def _async_scan_target(
@@ -691,6 +695,7 @@ async def _async_scan_target(
     follow_redirects: bool,
     modules: Optional[list[str]] = None,
     plugin_dirs: Optional[list[str]] = None,
+    cve_min_severity: Optional[str] = None,
     progress: Optional[Callable[[str], None]] = None,
 ) -> ScanResult:
     if not url.startswith(("http://", "https://")):
@@ -747,7 +752,7 @@ async def _async_scan_target(
     )
     result.notes = detect_contradictions(result.technologies)
     if "cve" in (modules or []) or "cves" in (modules or []):
-        _correlate_detection_cves(result.technologies)
+        _correlate_detection_cves(result.technologies, min_severity=cve_min_severity)
     result.ip = _resolve_ip(parsed.hostname or "")
     result.enriched = {
         "services": build_service_summary(result),
@@ -777,6 +782,7 @@ async def scan_many(
     cache_ttl: int = 86400,
     plugin_dirs: Optional[list[str]] = None,
     progress: Optional[Callable[[str], None]] = None,
+    cve_min_severity: Optional[str] = None,
 ) -> list[ScanResult]:
     """Scan multiple targets concurrently using one shared async HTTP client."""
     if not targets:
@@ -812,7 +818,9 @@ async def scan_many(
                         progress(f"using cached scan for {target}")
                     return _deserialize_scan_result(cached)
             await wait_for_host_rate(target)
-            result = await _async_scan_target(client, target, timeout, follow_redirects, modules, plugin_dirs, progress)
+            result = await _async_scan_target(
+                client, target, timeout, follow_redirects, modules, plugin_dirs, cve_min_severity, progress
+            )
             if cache and not result.error:
                 cache.set(target, "scan", _serialize_scan_result(result))
             return result
@@ -1089,6 +1097,7 @@ def scan(
     modules: Optional[list[str]] = None,
     plugin_dirs: Optional[list[str]] = None,
     progress: Optional[Callable[[str], None]] = None,
+    cve_min_severity: Optional[str] = None,
 ) -> ScanResult:
     def report(message: str):
         if progress:
@@ -1130,6 +1139,8 @@ def scan(
         report(f"response received {result.status_code}")
         result.technologies = run_fingerprints(resp_headers, cookies, body, url=url, progress=progress)
         result.notes = detect_contradictions(result.technologies)
+        if "cve" in (modules or []) or "cves" in (modules or []):
+            _correlate_detection_cves(result.technologies, min_severity=cve_min_severity)
 
     except httpx.ConnectError:
         # Try HTTP fallback
@@ -1150,7 +1161,7 @@ def scan(
             result.technologies = run_fingerprints(resp_headers, cookies, body, url=http_url, progress=progress)
             result.notes = detect_contradictions(result.technologies)
             if "cve" in (modules or []) or "cves" in (modules or []):
-                _correlate_detection_cves(result.technologies)
+                _correlate_detection_cves(result.technologies, min_severity=cve_min_severity)
         except Exception as e:
             report(f"http error: {e}")
             result.error = str(e)

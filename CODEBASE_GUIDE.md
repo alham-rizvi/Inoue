@@ -128,6 +128,10 @@ Every fixture under `tests/fixtures/<technology>/` contains `response.html` and 
 
 `python scripts/audit_signatures.py --stale-days N` reports signatures missing `last_verified` metadata or older than the cutoff. The audit accepts optional `since`, `source`, and `last_verified` fields without requiring a mass catalog rewrite; maintainers can update provenance incrementally as signatures are verified.
 
+### 16. CVE ranges remain local and deterministic
+
+CVE entries may use an `affected` expression such as `>=2.0,<2.4.52`. The comparator is deliberately small and dotted-version based, with no live lookup during scans. `--cve-min-severity` filters matches after range evaluation and results are sorted from critical to low.
+
 ## How a scan executes
 
 The flow is roughly:

@@ -393,6 +393,7 @@ def main(
     passive: bool = typer.Option(False, "--passive", help="Enable passive recon sources such as crt.sh and public intel"),
     company: bool = typer.Option(False, "--company", help="Collect site and company metadata alongside recon results"),
     cve: bool = typer.Option(False, "--cve", help="Correlate detected versions with the local CVE dataset"),
+    cve_min_severity: Optional[str] = typer.Option(None, "--cve-min-severity", help="Minimum CVE severity: low, medium, high, or critical"),
 ):
     """
     Inoue — tech stack fingerprinting CLI
@@ -515,6 +516,7 @@ def main(
                 cache_path=cache_path or "~/.cache/inoue/cache.db" if cache else None,
                 cache_ttl=cache_ttl,
                 plugin_dirs=[plugin_dir] if plugin_dir else None,
+                cve_min_severity=cve_min_severity,
             )))
             for target in targets:
                 progress.remove_task(tasks_map[target])
@@ -531,6 +533,7 @@ def main(
                         api_key=api_key,
                         modules=modules,
                         plugin_dirs=[plugin_dir] if plugin_dir else None,
+                        cve_min_severity=cve_min_severity,
                         progress=make_progress_callback(t, tasks_map[t]),
                     ): t
                     for t in targets

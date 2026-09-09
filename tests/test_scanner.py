@@ -398,6 +398,20 @@ class ScannerSummaryTests(unittest.TestCase):
         self.assertEqual(matches[0]["id"], "CVE-2021-41773")
         self.assertEqual(matches[0]["severity"], "critical")
 
+    def test_cve_range_matching_and_severity_filtering(self):
+        dataset = [
+            {"id": "CVE-RANGE", "technology": "Apache", "affected": ">=2.4.0,<2.4.52", "severity": "high"},
+            {"id": "CVE-LOW", "technology": "Apache", "versions": ["2.4.49"], "severity": "low"},
+        ]
+
+        in_range = correlate_cves("Apache", "2.4.49", dataset, min_severity="medium")
+        boundary = correlate_cves("Apache", "2.4.52", dataset)
+        exact = correlate_cves("Apache", "2.4.49", dataset)
+
+        self.assertEqual([item["id"] for item in in_range], ["CVE-RANGE"])
+        self.assertEqual(boundary, [])  # Changed to assert that boundary is empty
+        self.assertEqual([item["id"] for item in exact], ["CVE-RANGE", "CVE-LOW"])
+
     def test_nuclei_export_groups_targets_by_technology_tag(self):
         with TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "nuclei.json"

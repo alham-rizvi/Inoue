@@ -200,6 +200,12 @@ python inoue.py --cve <target>
 
 This uses the bundled offline dataset and reports informational matches only.
 
+Filter CVE output by severity:
+
+```bash
+python inoue.py --cve --cve-min-severity high <target>
+```
+
 Refresh the local dataset explicitly from an NVD JSON feed:
 
 ```bash
