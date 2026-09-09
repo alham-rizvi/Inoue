@@ -136,6 +136,10 @@ CVE entries may use an `affected` expression such as `>=2.0,<2.4.52`. The compar
 
 `scripts/import_wappalyzer.py` accepts a local catalog or verified-TLS URL and normalizes it into JSON entries with `source: wappalyzer-import`. It is dry-run by default; `--write --output FILE` is required to persist the result. Review the generated entries and run the duplicate-signature checker before merging them into the catalog.
 
+### 18. Reports share one flattened result shape
+
+`result_to_dict()` is the serialization boundary for JSON and HTML output. The self-contained `.html` report reuses that shape, embeds its CSS, and includes technology confidence and CVE sections without external assets or network requests.
+
 ## How a scan executes
 
 The flow is roughly:

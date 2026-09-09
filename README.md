@@ -75,6 +75,7 @@ python inoue.py --nuclei-out nuclei-targets.json target.com
 # JSON output
 python inoue.py --json target.com
 python inoue.py --json -o results.json target.com
+python inoue.py -o report.html target.com
 
 # Fast HTB/CTF style scan without DNS
 python inoue.py --no-dns -t 5 10.10.11.55

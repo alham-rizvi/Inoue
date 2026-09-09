@@ -23,7 +23,7 @@ from core.scanner import (
 from core.cve import correlate_cves, refresh_cve_dataset
 from core.plugins import run_plugins
 from fingerprints.signatures import SIGNATURES
-from inoue import app, format_update_report, load_targets, write_nuclei_export
+from inoue import app, format_update_report, load_targets, render_html_report, write_nuclei_export
 
 
 class ScannerSummaryTests(unittest.TestCase):
@@ -429,6 +429,29 @@ class ScannerSummaryTests(unittest.TestCase):
 
         self.assertIn('"apache": [', payload)
         self.assertIn("https://example.com", payload)
+
+    def test_html_report_contains_technology_and_cve_sections(self):
+        result = ScanResult(
+            "https://example.com",
+            "https://example.com",
+            200,
+            1,
+            technologies=[
+                Detection(
+                    "Apache",
+                    "Web Server",
+                    version="2.4.49",
+                    confidence_score=80,
+                    cves=[{"id": "CVE-TEST", "severity": "high", "summary": "Example"}],
+                ),
+            ],
+        )
+
+        report = render_html_report([result])
+
+        self.assertIn("Inoue reconnaissance report", report)
+        self.assertIn("Apache", report)
+        self.assertIn("CVE-TEST", report)
 
     def test_plugins_run_and_failures_are_isolated(self):
         with TemporaryDirectory() as temp_dir:

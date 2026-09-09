@@ -184,6 +184,12 @@ Save JSON to a file:
 ```bash
 python inoue.py --json -o results.json <target>
 
+Save a self-contained HTML report:
+
+```bash
+python inoue.py -o report.html <target>
+```
+
 ## Local cache
 
 ```bash

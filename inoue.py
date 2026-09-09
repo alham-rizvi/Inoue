@@ -11,6 +11,7 @@ Repository: https://github.com/alhamrizvi-cloud/Inoue
 import json
 import asyncio
 import concurrent.futures
+import html
 import re
 import subprocess
 import sys
@@ -288,6 +289,70 @@ def write_nuclei_export(results: list[ScanResult], output_path: str) -> None:
     Path(output_path).write_text(json.dumps(grouped, indent=2) + "\n", encoding="utf-8")
 
 
+def result_to_dict(result: ScanResult) -> dict:
+    return {
+        "url": result.url,
+        "final_url": result.final_url,
+        "ip": result.ip,
+        "status_code": result.status_code,
+        "response_time_ms": result.response_time_ms,
+        "server": result.server,
+        "technologies": [
+            {
+                "name": technology.name,
+                "category": technology.category,
+                "version": technology.version,
+                "confidence": technology.confidence,
+                "confidence_score": technology.confidence_score,
+                "evidence": technology.evidence,
+                "cves": technology.cves,
+            }
+            for technology in result.technologies
+        ],
+        "dns": result.dns_records,
+        "ssl": result.ssl_info,
+        "recon": result.enriched.get("recon", []) if result.enriched else [],
+        "service_hints": result.enriched.get("service_hints", []) if result.enriched else [],
+        "plugins": result.enriched.get("plugins", {}) if result.enriched else {},
+        "notes": result.notes,
+        "error": result.error,
+    }
+
+
+def render_html_report(results: list[ScanResult]) -> str:
+    rows = []
+    cves = []
+    for result in results:
+        data = result_to_dict(result)
+        technologies = data["technologies"]
+        for technology in technologies:
+            rows.append(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
+                    html.escape(data["final_url"]),
+                    html.escape(technology["name"]),
+                    html.escape(technology["category"]),
+                    html.escape(str(technology["version"] or "unknown")),
+                    html.escape(str(technology["confidence_score"])),
+                )
+            )
+            for cve in technology["cves"]:
+                cves.append(
+                    "<li><strong>{}</strong> {} ({})</li>".format(
+                        html.escape(cve["id"]),
+                        html.escape(technology["name"]),
+                        html.escape(cve["severity"]),
+                    )
+                )
+    cve_section = "<ul>{}</ul>".format("".join(cves)) if cves else "<p>No known CVE matches.</p>"
+    return """<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Inoue report</title>
+<style>body{{font:15px sans-serif;margin:2rem;color:#202124}}table{{border-collapse:collapse;width:100%}}th,td{{border:1px solid #ccc;padding:.5rem;text-align:left}}th{{background:#f2f2f2}}h1{{margin-bottom:.25rem}}</style>
+</head><body><h1>Inoue reconnaissance report</h1>
+<table><thead><tr><th>Target</th><th>Technology</th><th>Category</th><th>Version</th><th>Confidence</th></tr></thead>
+<tbody>{rows}</tbody></table><h2>Known CVEs</h2>{cve_section}</body></html>
+""".format(rows="".join(rows), cve_section=cve_section)
+
+
 def run_self_update() -> dict:
     repo_root = Path(__file__).resolve().parent
     try:
@@ -552,39 +617,13 @@ def main(
         console.print(f"  [green]saved[/green] {nuclei_out}")
 
     if json_out or output:
-        out = []
-        for r in results:
-            out.append({
-                "url": r.url,
-                "final_url": r.final_url,
-                "ip": r.ip,
-                "status_code": r.status_code,
-                "response_time_ms": r.response_time_ms,
-                "server": r.server,
-                "technologies": [
-                    {
-                        "name": t.name,
-                        "category": t.category,
-                        "version": t.version,
-                        "confidence": t.confidence,
-                        "confidence_score": t.confidence_score,
-                        "evidence": t.evidence,
-                        "cves": t.cves,
-                    }
-                    for t in r.technologies
-                ],
-                "dns": r.dns_records,
-                "ssl": r.ssl_info,
-                "recon": r.enriched.get("recon", []) if r.enriched else [],
-                "service_hints": r.enriched.get("service_hints", []) if r.enriched else [],
-                "plugins": r.enriched.get("plugins", {}) if r.enriched else {},
-                "notes": r.notes,
-                "error": r.error,
-            })
-        json_str = json.dumps(out, indent=2)
+        if output and Path(output).suffix.lower() == ".html":
+            Path(output).write_text(render_html_report(results), encoding="utf-8")
+            console.print(f"  [green]saved[/green] {output}")
+            return
+        json_str = json.dumps([result_to_dict(result) for result in results], indent=2)
         if output:
-            with open(output, "w") as f:
-                f.write(json_str)
+            Path(output).write_text(json_str, encoding="utf-8")
             console.print(f"  [green]saved[/green] {output}")
         if json_out:
             print(json_str)
