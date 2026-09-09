@@ -160,6 +160,13 @@ Contributions are welcome. Please see [CONTRIBUTING.md](CONTRIBUTING.md) for set
 
 A full walkthrough for extending the fingerprint catalog, adding version detection heuristics, and keeping the tool current is available in [GUIDE.md](GUIDE.md).
 
+Normalize a reviewed Wappalyzer catalog without changing scans:
+
+```bash
+python scripts/import_wappalyzer.py wappalyzer.json
+python scripts/import_wappalyzer.py wappalyzer.json --write --output imported.json
+```
+
 ## Adding signatures
 
 Edit [fingerprints/signatures.py](fingerprints/signatures.py). Each entry follows this schema:

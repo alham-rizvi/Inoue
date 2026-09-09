@@ -132,6 +132,10 @@ Every fixture under `tests/fixtures/<technology>/` contains `response.html` and 
 
 CVE entries may use an `affected` expression such as `>=2.0,<2.4.52`. The comparator is deliberately small and dotted-version based, with no live lookup during scans. `--cve-min-severity` filters matches after range evaluation and results are sorted from critical to low.
 
+### 17. Wappalyzer imports are explicit maintenance artifacts
+
+`scripts/import_wappalyzer.py` accepts a local catalog or verified-TLS URL and normalizes it into JSON entries with `source: wappalyzer-import`. It is dry-run by default; `--write --output FILE` is required to persist the result. Review the generated entries and run the duplicate-signature checker before merging them into the catalog.
+
 ## How a scan executes
 
 The flow is roughly:

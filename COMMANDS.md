@@ -225,6 +225,21 @@ The export is a JSON mapping of normalized technology tags to target URLs.
 ## Plugins
 
 Place a Python plugin defining `run(result)` in `modules/` or `~/.config/inoue/modules/`, or pass `--plugin-dir PATH`.
+
+## Catalog maintenance
+
+Normalize a local Wappalyzer catalog in dry-run mode:
+
+```bash
+python scripts/import_wappalyzer.py wappalyzer.json
+```
+
+Persist reviewed normalized entries explicitly with `--write --output FILE`.
+Audit signature provenance with:
+
+```bash
+python scripts/audit_signatures.py --stale-days 180
+```
 ```
 
 ## Worker count
