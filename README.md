@@ -65,6 +65,9 @@ python inoue.py --rate-limit 1 --cache target.com
 # Correlate detected versions with the local CVE dataset
 python inoue.py --cve target.com
 
+# Refresh the local CVE dataset explicitly
+python inoue.py update-cve
+
 # Export technology-tagged URLs for downstream nuclei workflows
 python inoue.py --nuclei-out nuclei-targets.json target.com
 

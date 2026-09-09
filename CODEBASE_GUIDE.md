@@ -98,7 +98,7 @@ The scanner core and the CLI are intentionally separate. The CLI is not meant to
 
 ### 8. CVE correlation is local and informational
 
-`--cve` compares exact `(technology, version)` pairs against `data/cves.json`. It does not call a live API during scans and never retrieves or executes exploits.
+`--cve` compares exact `(technology, version)` pairs against `data/cves.json`. It does not call a live API during scans and never retrieves or executes exploits. `python inoue.py update-cve` is the explicit refresh path; it downloads an NVD 2.0 JSON feed with verified TLS and converts it into the local dataset.
 
 ### 9. Plugin output is enrichment only
 

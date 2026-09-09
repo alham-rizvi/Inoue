@@ -24,6 +24,7 @@ from rich.table import Table
 from rich import box
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
+from core.cve import refresh_cve_dataset
 from core.scanner import build_service_summary, scan, scan_many, ScanResult
 
 app = typer.Typer(help="Inoue — tech stack fingerprinting CLI", add_completion=False)
@@ -339,6 +340,20 @@ def about():
     console.print("  - python inoue.py -m full-recon https://target.example")
 
 
+@app.command("update-cve")
+def update_cve(
+    source_url: Optional[str] = typer.Option(None, "--source-url", help="Override the NVD JSON feed URL"),
+    output: Optional[str] = typer.Option(None, "-o", "--output", help="Write the refreshed dataset to FILE"),
+):
+    """Refresh the local offline CVE awareness dataset."""
+    try:
+        count = refresh_cve_dataset(source_url=source_url, output_path=output)
+        console.print(f"[green]updated[/green] CVE dataset with {count} entries")
+    except Exception as exc:
+        console.print(f"[red]update-cve failed[/red] {exc}")
+        raise typer.Exit(1)
+
+
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
@@ -392,6 +407,29 @@ def main(
     """
     if ctx.invoked_subcommand is not None:
         return
+
+    if targets and targets[0] == "update-cve":
+        command_args = targets[1:]
+        if "--help" in command_args or "-h" in command_args:
+            console.print("Usage: python inoue.py update-cve [--source-url URL] [-o FILE]")
+            raise typer.Exit()
+        source_url = None
+        output_path = None
+        index = 0
+        while index < len(command_args):
+            argument = command_args[index]
+            if argument == "--source-url" and index + 1 < len(command_args):
+                source_url = command_args[index + 1]
+                index += 2
+                continue
+            if argument in {"-o", "--output"} and index + 1 < len(command_args):
+                output_path = command_args[index + 1]
+                index += 2
+                continue
+            console.print(f"[red]unknown update-cve option[/red] {argument}")
+            raise typer.Exit(2)
+        update_cve(source_url=source_url, output=output_path)
+        raise typer.Exit()
 
     targets = load_targets(targets, list_file)
     if not targets:
@@ -526,6 +564,7 @@ def main(
                 "ssl": r.ssl_info,
                 "recon": r.enriched.get("recon", []) if r.enriched else [],
                 "service_hints": r.enriched.get("service_hints", []) if r.enriched else [],
+                "plugins": r.enriched.get("plugins", {}) if r.enriched else {},
                 "error": r.error,
             })
         json_str = json.dumps(out, indent=2)

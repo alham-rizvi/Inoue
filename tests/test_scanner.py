@@ -3,7 +3,7 @@ from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from typer.testing import CliRunner
 
@@ -17,7 +17,7 @@ from core.scanner import (
     summarize_whois_details,
     run_fingerprints,
 )
-from core.cve import correlate_cves
+from core.cve import correlate_cves, refresh_cve_dataset
 from core.plugins import run_plugins
 from fingerprints.signatures import SIGNATURES
 from inoue import app, format_update_report, load_targets, write_nuclei_export
@@ -365,6 +365,21 @@ class ScannerSummaryTests(unittest.TestCase):
 
         self.assertEqual(outputs["working"]["ok"], "https://example.com")
         self.assertIn("plugin failed", outputs["broken"]["error"])
+
+    @patch("core.cve.httpx.Client")
+    def test_refresh_cve_dataset_writes_nvd_fixture_without_live_network(self, mock_client):
+        response = MagicMock()
+        response.content = b'{"vulnerabilities": [{"cve": {"id": "CVE-TEST", "descriptions": [{"lang": "en", "value": "Example"}], "metrics": {"cvssMetricV31": [{"cvssData": {"baseSeverity": "HIGH"}}]}, "configurations": {"nodes": [{"cpeMatch": [{"criteria": "cpe:2.3:a:apache:http_server:2.4.49:*:*:*:*:*:*:*"}]}]}}}]}'
+        mock_client.return_value.__enter__.return_value.get.return_value = response
+
+        with TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "cves.json"
+            count = refresh_cve_dataset("https://feed.example/cves.json", str(output_path))
+            payload = output_path.read_text(encoding="utf-8")
+
+        self.assertEqual(count, 1)
+        self.assertIn("CVE-TEST", payload)
+        mock_client.assert_called_once_with(timeout=60, verify=True, follow_redirects=True)
 
     def test_merge_subdomain_candidates_combines_passive_and_active_sources(self):
         merged = merge_subdomain_candidates(

@@ -200,6 +200,14 @@ python inoue.py --cve <target>
 
 This uses the bundled offline dataset and reports informational matches only.
 
+Refresh the local dataset explicitly from an NVD JSON feed:
+
+```bash
+python inoue.py update-cve
+```
+
+Use `--source-url` for a reviewed feed mirror and `-o` to write a separate dataset file.
+
 ## Nuclei export
 
 ```bash
