@@ -45,6 +45,7 @@ class Detection:
     category: str
     version: Optional[str] = None
     confidence: str = "high"  # high / medium / low
+    confidence_score: float = 0.0
     evidence: str = ""
     cves: list[dict] = field(default_factory=list)
 
@@ -152,6 +153,10 @@ def _match_html(sig: dict, body: str) -> tuple[bool, Optional[str], str]:
             version = _extract_version(pattern.pattern if hasattr(pattern, "pattern") else str(pattern), body[m.start():m.end() + 80])
             return True, version, f"HTML: …{snippet[:60]}…"
     return False, None, ""
+
+
+def _count_html_matches(sig: dict, body: str) -> int:
+    return sum(1 for pattern in sig.get("html", []) if pattern.search(body))
 
 
 def _match_scripts(sig: dict, scripts: list[str]) -> tuple[bool, Optional[str], str]:
@@ -617,6 +622,7 @@ def build_service_summary(result: ScanResult) -> list[dict]:
             "category": tech.category,
             "version": tech.version or "unknown",
             "confidence": tech.confidence,
+            "confidence_score": tech.confidence_score,
             "evidence": tech.evidence,
         })
     return summary
@@ -988,16 +994,24 @@ def run_fingerprints(headers: dict, cookies: dict, body: str, url: str = "", pro
                     evidence = candidate_evidence
                     break
 
-            if best_rank >= 4:
+            signal_weights = {4: 40.0, 3: 35.0, 2: 25.0, 1: 12.0, 0: 10.0}
+            score = sum(signal_weights[rank] for rank, _, _ in candidates)
+            html_matches = _count_html_matches(sig, body)
+            if html_matches > 1:
+                score = score - signal_weights[1] + signal_weights[1] * (1 + 0.7 * (html_matches - 1))
+            score *= 1 + min(0.5, 0.15 * max(0, len(candidates) - 1))
+            confidence_score = round(min(100.0, score), 1)
+
+            if confidence_score >= 70:
                 confidence = "high"
-            elif best_rank >= 3:
+            elif confidence_score >= 35:
                 confidence = "high"
-            elif best_rank >= 2:
-                confidence = "medium"
-            elif best_rank >= 1:
+            elif confidence_score >= 20:
                 confidence = "medium"
             else:
                 confidence = "low"
+        else:
+            confidence_score = 0.0
 
         if matched:
             if tech_name not in seen_names:
@@ -1006,6 +1020,7 @@ def run_fingerprints(headers: dict, cookies: dict, body: str, url: str = "", pro
                     category=category,
                     version=version,
                     confidence=confidence,
+                    confidence_score=confidence_score,
                     evidence=evidence,
                 ))
                 seen_names.add(tech_name)

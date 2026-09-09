@@ -108,6 +108,10 @@ Plugins are Python files with a `run(result)` function in `modules/` or `~/.conf
 
 `--nuclei-out FILE` writes a JSON mapping from normalized technology tags to deduplicated final URLs, such as `{"apache": ["https://example.com"]}`.
 
+### 11. Confidence uses signal agreement
+
+Each detection retains the existing `high`/`medium`/`low` confidence label and now also exposes a bounded `confidence_score` from 0 to 100. Strong sources such as headers and meta tags receive larger base weights; repeated independent HTML matches receive a multiplicative agreement boost. This makes thresholding possible without changing the existing human-readable contract.
+
 ## How a scan executes
 
 The flow is roughly:

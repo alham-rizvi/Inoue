@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -125,6 +126,29 @@ class ScannerSummaryTests(unittest.TestCase):
 
         self.assertEqual(versions.get("WordPress"), "6.5.1")
         self.assertEqual(versions.get("Elementor"), "3.23.0")
+
+    def test_confidence_score_rewards_independent_html_agreement(self):
+        html_name = "__confidence_html_fixture__"
+        script_name = "__confidence_script_fixture__"
+        html_signature = {
+            "category": "Test",
+            "html": [re.compile(r"html-signal-one"), re.compile(r"html-signal-two"), re.compile(r"html-signal-three")],
+        }
+        script_signature = {"category": "Test", "scripts": [re.compile(r"script-signal")]}
+        with patch.dict(
+            "core.scanner.COMPILED_SIGNATURES",
+            {html_name: html_signature, script_name: script_signature},
+            clear=False,
+        ), patch("core.scanner._collect_candidate_signatures", return_value={html_name, script_name}):
+            detections = run_fingerprints(
+                {},
+                {},
+                '<script src="/script-signal.js"></script> html-signal-one html-signal-two html-signal-three',
+            )
+
+        scores = {d.name: d.confidence_score for d in detections}
+        self.assertGreater(scores[html_name], scores[script_name])
+        self.assertGreater(scores[html_name], 0)
 
     def test_run_fingerprints_detects_ecommerce_and_marketing_signatures(self):
         headers = {}

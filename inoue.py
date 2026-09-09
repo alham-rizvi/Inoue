@@ -559,7 +559,15 @@ def main(
                 "response_time_ms": r.response_time_ms,
                 "server": r.server,
                 "technologies": [
-                    {"name": t.name, "category": t.category, "version": t.version, "evidence": t.evidence, "cves": t.cves}
+                    {
+                        "name": t.name,
+                        "category": t.category,
+                        "version": t.version,
+                        "confidence": t.confidence,
+                        "confidence_score": t.confidence_score,
+                        "evidence": t.evidence,
+                        "cves": t.cves,
+                    }
                     for t in r.technologies
                 ],
                 "dns": r.dns_records,
