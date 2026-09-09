@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Alham Rizvi. All rights reserved.
+# Proprietary and confidential. Unauthorized copying, redistribution, modification,
+# commercial use, or public disclosure is prohibited without written permission.
 """
 Inoue - tech stack fingerprinting CLI
 Author: Alham Rizvi

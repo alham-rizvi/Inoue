@@ -181,4 +181,6 @@ Planned improvements include:
 
 ## License
 
-MIT.
+This project is licensed under a proprietary freelance license. All rights are reserved by the copyright holder. Unauthorized copying, redistribution, modification, commercial use, or publication is prohibited without written permission.
+
+See [LICENSE](LICENSE) for the full text.

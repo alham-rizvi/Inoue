@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Alham Rizvi. All rights reserved.
+# Proprietary and confidential. Unauthorized copying, redistribution, modification,
+# commercial use, or public disclosure is prohibited without written permission.
 """
 Core scanning engine - fetches target and runs all detections concurrently.
 """
