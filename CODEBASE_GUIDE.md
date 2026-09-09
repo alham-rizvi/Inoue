@@ -124,6 +124,10 @@ When multiple `Web Server` signatures match, Inoue keeps the detections and adds
 
 Every fixture under `tests/fixtures/<technology>/` contains `response.html` and `headers.json`. The auto-discovered harness runs each pair through the real matcher, so catalog contributors can add regression evidence without duplicating test code. Fixture signals should use patterns that are indexed by the current tokenizer.
 
+### 15. Provenance audits are read-only maintenance reports
+
+`python scripts/audit_signatures.py --stale-days N` reports signatures missing `last_verified` metadata or older than the cutoff. The audit accepts optional `since`, `source`, and `last_verified` fields without requiring a mass catalog rewrite; maintainers can update provenance incrementally as signatures are verified.
+
 ## How a scan executes
 
 The flow is roughly:
