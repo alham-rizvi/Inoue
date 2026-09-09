@@ -112,6 +112,14 @@ Plugins are Python files with a `run(result)` function in `modules/` or `~/.conf
 
 Each detection retains the existing `high`/`medium`/`low` confidence label and now also exposes a bounded `confidence_score` from 0 to 100. Strong sources such as headers and meta tags receive larger base weights; repeated independent HTML matches receive a multiplicative agreement boost. This makes thresholding possible without changing the existing human-readable contract.
 
+### 12. Negative signatures suppress generic matches explicitly
+
+A signature may declare `excludes` with technology names that make its generic match misleading. Suppression happens after all candidates are matched, so specific evidence is available before a generic detection is removed. Existing signatures without this field behave unchanged.
+
+### 13. Contradictions are retained as recon notes
+
+When multiple `Web Server` signatures match, Inoue keeps the detections and adds a note describing the conflict as a possible reverse proxy or layered deployment. This avoids silently discarding useful contradictory evidence.
+
 ## How a scan executes
 
 The flow is roughly:

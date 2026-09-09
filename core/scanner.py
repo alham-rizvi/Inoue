@@ -71,6 +71,7 @@ class ScanResult:
     extra_intel: dict = field(default_factory=dict)
     error: Optional[str] = None
     enriched: dict = field(default_factory=dict)
+    notes: list[str] = field(default_factory=list)
 
 
 def _normalize_version(raw: str) -> Optional[str]:
@@ -157,6 +158,22 @@ def _match_html(sig: dict, body: str) -> tuple[bool, Optional[str], str]:
 
 def _count_html_matches(sig: dict, body: str) -> int:
     return sum(1 for pattern in sig.get("html", []) if pattern.search(body))
+
+
+def _filter_excluded_detections(detections: list[Detection]) -> list[Detection]:
+    names = {detection.name for detection in detections}
+    return [
+        detection
+        for detection in detections
+        if not any(name in names for name in COMPILED_SIGNATURES.get(detection.name, {}).get("excludes", []))
+    ]
+
+
+def detect_contradictions(detections: list[Detection]) -> list[str]:
+    servers = [detection.name for detection in detections if detection.category == "Web Server"]
+    if len(servers) < 2:
+        return []
+    return [f"conflicting server signals: {', '.join(servers)} — possible reverse proxy"]
 
 
 def _match_scripts(sig: dict, scripts: list[str]) -> tuple[bool, Optional[str], str]:
@@ -640,6 +657,7 @@ def _serialize_scan_result(result: ScanResult) -> dict:
         "headers": result.headers,
         "enriched": result.enriched,
         "error": result.error,
+        "notes": result.notes,
     }
 
 
@@ -654,6 +672,7 @@ def _deserialize_scan_result(payload: dict) -> ScanResult:
         headers=payload.get("headers", {}),
         enriched=payload.get("enriched", {}),
         error=payload.get("error"),
+        notes=payload.get("notes", []),
     )
     result.technologies = [Detection(**item) for item in payload.get("technologies", [])]
     return result
@@ -726,6 +745,7 @@ async def _async_scan_target(
         url=result.final_url,
         progress=progress,
     )
+    result.notes = detect_contradictions(result.technologies)
     if "cve" in (modules or []) or "cves" in (modules or []):
         _correlate_detection_cves(result.technologies)
     result.ip = _resolve_ip(parsed.hostname or "")
@@ -1025,6 +1045,7 @@ def run_fingerprints(headers: dict, cookies: dict, body: str, url: str = "", pro
                 ))
                 seen_names.add(tech_name)
                 report(f"detected {tech_name} ({category})")
+    detections = _filter_excluded_detections(detections)
     report(f"fingerprint matching complete ({len(detections)} detections)")
 
     if path:
@@ -1108,6 +1129,7 @@ def scan(
 
         report(f"response received {result.status_code}")
         result.technologies = run_fingerprints(resp_headers, cookies, body, url=url, progress=progress)
+        result.notes = detect_contradictions(result.technologies)
 
     except httpx.ConnectError:
         # Try HTTP fallback
@@ -1126,6 +1148,7 @@ def scan(
             body = resp.text
             report(f"response received {result.status_code}")
             result.technologies = run_fingerprints(resp_headers, cookies, body, url=http_url, progress=progress)
+            result.notes = detect_contradictions(result.technologies)
             if "cve" in (modules or []) or "cves" in (modules or []):
                 _correlate_detection_cves(result.technologies)
         except Exception as e:

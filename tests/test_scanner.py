@@ -15,6 +15,7 @@ from core.scanner import (
     async_scan_many,
     build_recon_plan,
     build_service_summary,
+    detect_contradictions,
     merge_subdomain_candidates,
     summarize_whois_details,
     run_fingerprints,
@@ -149,6 +150,33 @@ class ScannerSummaryTests(unittest.TestCase):
         scores = {d.name: d.confidence_score for d in detections}
         self.assertGreater(scores[html_name], scores[script_name])
         self.assertGreater(scores[html_name], 0)
+
+    def test_negative_signature_excludes_generic_detection(self):
+        generic_name = "__generic_fixture__"
+        specific_name = "__specific_fixture__"
+        with patch.dict(
+            "core.scanner.COMPILED_SIGNATURES",
+            {
+                generic_name: {"category": "Test", "html": [re.compile(r"shared-signal")], "excludes": [specific_name]},
+                specific_name: {"category": "Test", "html": [re.compile(r"shared-signal")]},
+            },
+            clear=False,
+        ), patch("core.scanner._collect_candidate_signatures", return_value={generic_name, specific_name}):
+            detections = run_fingerprints({}, {}, "shared-signal")
+
+        self.assertEqual({d.name for d in detections}, {specific_name})
+
+    def test_contradictions_flag_conflicting_server_signals(self):
+        detections = [
+            Detection("Nginx", "Web Server", evidence="Server: nginx"),
+            Detection("Apache", "Web Server", evidence="HTML: Apache"),
+        ]
+
+        notes = detect_contradictions(detections)
+
+        self.assertEqual(len(notes), 1)
+        self.assertIn("nginx", notes[0].lower())
+        self.assertIn("apache", notes[0].lower())
 
     def test_run_fingerprints_detects_ecommerce_and_marketing_signatures(self):
         headers = {}

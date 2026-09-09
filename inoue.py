@@ -575,6 +575,7 @@ def main(
                 "recon": r.enriched.get("recon", []) if r.enriched else [],
                 "service_hints": r.enriched.get("service_hints", []) if r.enriched else [],
                 "plugins": r.enriched.get("plugins", {}) if r.enriched else {},
+                "notes": r.notes,
                 "error": r.error,
             })
         json_str = json.dumps(out, indent=2)
