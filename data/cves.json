@@ -1,0 +1,9 @@
+[
+  {
+    "id": "CVE-2021-41773",
+    "technologies": ["Apache"],
+    "versions": ["2.4.49"],
+    "summary": "Apache HTTP Server 2.4.49 path traversal and file disclosure vulnerability.",
+    "severity": "critical"
+  }
+]

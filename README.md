@@ -55,6 +55,22 @@ python inoue.py -v -e https://target.com
 # Scan multiple targets concurrently
 python inoue.py site1.com site2.com site3.com
 
+# Read targets from a file or stdin pipeline
+python inoue.py --list targets.txt
+cat targets.txt | python inoue.py --json
+
+# Rate-limit and cache repeat scans
+python inoue.py --rate-limit 1 --cache target.com
+
+# Correlate detected versions with the local CVE dataset
+python inoue.py --cve target.com
+
+# Refresh the local CVE dataset explicitly
+python inoue.py update-cve
+
+# Export technology-tagged URLs for downstream nuclei workflows
+python inoue.py --nuclei-out nuclei-targets.json target.com
+
 # JSON output
 python inoue.py --json target.com
 python inoue.py --json -o results.json target.com
@@ -93,6 +109,14 @@ For a full command reference, see [COMMANDS.md](COMMANDS.md).
 | `--all` | Enable all recon modules |
 | `-t, --timeout` | HTTP timeout in seconds (default: 10) |
 | `-w, --workers` | Concurrent scan threads (default: 5) |
+| `-l, --list` | Read one target per line from a file |
+| `--rate-limit` | Maximum requests per second per host |
+| `--cache` | Enable the opt-in local SQLite cache |
+| `--cache-path` | Override the SQLite cache path |
+| `--cache-ttl` | Cache lifetime in seconds |
+| `--cve` | Match detected versions against the local CVE dataset |
+| `--nuclei-out` | Write technology-tagged target groups as JSON |
+| `--plugin-dir` | Load result plugins from an additional directory |
 | `--json` | Output results as JSON |
 | `-o, --output` | Save JSON to a file |
 | `--no-banner` | Suppress the ASCII banner |

@@ -1,19 +1,26 @@
+import asyncio
+from io import StringIO
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from typer.testing import CliRunner
 
 from core.scanner import (
     Detection,
     ScanResult,
+    async_scan_many,
     build_recon_plan,
     build_service_summary,
     merge_subdomain_candidates,
     summarize_whois_details,
     run_fingerprints,
 )
+from core.cve import correlate_cves, refresh_cve_dataset
+from core.plugins import run_plugins
 from fingerprints.signatures import SIGNATURES
-from inoue import app, format_update_report
+from inoue import app, format_update_report, load_targets, write_nuclei_export
 
 
 class ScannerSummaryTests(unittest.TestCase):
@@ -231,6 +238,148 @@ class ScannerSummaryTests(unittest.TestCase):
         self.assertEqual(summary["country"], "US")
         self.assertIn("Example Registrar", summary["registrar"])
         self.assertEqual(summary["nameservers"], ["ns1.example.com", "ns2.example.com"])
+
+    @patch("core.scanner.scan")
+    def test_async_scan_many_scans_multiple_targets(self, mock_scan):
+        mock_scan.side_effect = [
+            ScanResult(
+                url="https://example.com",
+                final_url="https://example.com",
+                status_code=200,
+                response_time_ms=10,
+            ),
+            ScanResult(
+                url="https://example.org",
+                final_url="https://example.org",
+                status_code=200,
+                response_time_ms=20,
+            ),
+        ]
+
+        async def run_scan():
+            return await async_scan_many(["example.com", "example.org"], workers=2)
+
+        results = asyncio.run(run_scan())
+
+        self.assertEqual(len(results), 2)
+        self.assertEqual([result.url for result in results], ["https://example.com", "https://example.org"])
+
+    def test_load_targets_supports_file_and_stdin_input(self):
+        with TemporaryDirectory() as temp_dir:
+            target_file = Path(temp_dir) / "targets.txt"
+            target_file.write_text("example.com\n# comment\nexample.org\nexample.com\n", encoding="utf-8")
+            self.assertEqual(load_targets([], str(target_file)), ["example.com", "example.org"])
+
+        stdin = StringIO("example.net\n\nexample.io\n")
+        with patch("inoue.sys.stdin", stdin):
+            self.assertEqual(load_targets([], None), ["example.net", "example.io"])
+
+    @patch("core.scanner._async_scan_target", new_callable=AsyncMock)
+    @patch("core.scanner.asyncio.sleep", new_callable=AsyncMock)
+    def test_scan_many_rate_limits_per_host(self, mock_sleep, mock_scan_target):
+        mock_scan_target.side_effect = [
+            ScanResult("https://example.com/a", "https://example.com/a", 200, 1),
+            ScanResult("https://example.com/b", "https://example.com/b", 200, 1),
+            ScanResult("https://example.org", "https://example.org", 200, 1),
+        ]
+
+        async def run_scan():
+            return await async_scan_many(
+                ["https://example.com/a", "https://example.com/b", "https://example.org"],
+                workers=3,
+                rate_limit=1,
+            )
+
+        asyncio.run(run_scan())
+
+        self.assertEqual(mock_sleep.await_count, 1)
+        self.assertAlmostEqual(mock_sleep.await_args.args[0], 1, delta=0.1)
+
+    @patch("core.scanner._async_scan_target", new_callable=AsyncMock)
+    def test_scan_many_uses_opt_in_cache(self, mock_scan_target):
+        mock_scan_target.return_value = ScanResult("example.com", "https://example.com", 200, 1)
+        messages = []
+
+        async def run_scan(cache_path):
+            return await async_scan_many(
+                ["example.com"],
+                cache_path=cache_path,
+                progress=messages.append,
+            )
+
+        with TemporaryDirectory() as temp_dir:
+            cache_path = str(Path(temp_dir) / "cache.db")
+            asyncio.run(run_scan(cache_path))
+            asyncio.run(run_scan(cache_path))
+
+        self.assertEqual(mock_scan_target.await_count, 1)
+        self.assertIn("using cached scan", " ".join(messages))
+
+    def test_cve_correlation_matches_exact_technology_version(self):
+        matches = correlate_cves(
+            "Apache",
+            "2.4.49",
+            [{
+                "id": "CVE-2021-41773",
+                "technology": "Apache",
+                "version": "2.4.49",
+                "summary": "Path traversal",
+                "severity": "critical",
+            }],
+        )
+
+        self.assertEqual(matches[0]["id"], "CVE-2021-41773")
+        self.assertEqual(matches[0]["severity"], "critical")
+
+    def test_nuclei_export_groups_targets_by_technology_tag(self):
+        with TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "nuclei.json"
+            write_nuclei_export([
+                ScanResult(
+                    "https://example.com",
+                    "https://example.com",
+                    200,
+                    1,
+                    technologies=[Detection("Apache", "Web Server")],
+                ),
+            ], str(output_path))
+
+            payload = output_path.read_text(encoding="utf-8")
+
+        self.assertIn('"apache": [', payload)
+        self.assertIn("https://example.com", payload)
+
+    def test_plugins_run_and_failures_are_isolated(self):
+        with TemporaryDirectory() as temp_dir:
+            plugin_dir = Path(temp_dir)
+            (plugin_dir / "working.py").write_text(
+                "def run(result):\n    return {'ok': result.final_url}\n",
+                encoding="utf-8",
+            )
+            (plugin_dir / "broken.py").write_text(
+                "def run(result):\n    raise RuntimeError('plugin failed')\n",
+                encoding="utf-8",
+            )
+            result = ScanResult("https://example.com", "https://example.com", 200, 1)
+            outputs = run_plugins(result, [plugin_dir])
+
+        self.assertEqual(outputs["working"]["ok"], "https://example.com")
+        self.assertIn("plugin failed", outputs["broken"]["error"])
+
+    @patch("core.cve.httpx.Client")
+    def test_refresh_cve_dataset_writes_nvd_fixture_without_live_network(self, mock_client):
+        response = MagicMock()
+        response.content = b'{"vulnerabilities": [{"cve": {"id": "CVE-TEST", "descriptions": [{"lang": "en", "value": "Example"}], "metrics": {"cvssMetricV31": [{"cvssData": {"baseSeverity": "HIGH"}}]}, "configurations": {"nodes": [{"cpeMatch": [{"criteria": "cpe:2.3:a:apache:http_server:2.4.49:*:*:*:*:*:*:*"}]}]}}}]}'
+        mock_client.return_value.__enter__.return_value.get.return_value = response
+
+        with TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "cves.json"
+            count = refresh_cve_dataset("https://feed.example/cves.json", str(output_path))
+            payload = output_path.read_text(encoding="utf-8")
+
+        self.assertEqual(count, 1)
+        self.assertIn("CVE-TEST", payload)
+        mock_client.assert_called_once_with(timeout=60, verify=True, follow_redirects=True)
 
     def test_merge_subdomain_candidates_combines_passive_and_active_sources(self):
         merged = merge_subdomain_candidates(

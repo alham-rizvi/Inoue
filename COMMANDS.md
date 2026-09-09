@@ -158,6 +158,19 @@ python inoue.py -t 5 <target>
 
 ```bash
 python inoue.py site1.com site2.com site3.com
+
+Read targets from a file or stdin for shell pipelines:
+
+```bash
+python inoue.py --list targets.txt
+cat targets.txt | python inoue.py --json
+```
+
+Limit requests per host during async batch scans:
+
+```bash
+python inoue.py --rate-limit 1 target.com
+```
 ```
 
 ## JSON output
@@ -170,6 +183,42 @@ Save JSON to a file:
 
 ```bash
 python inoue.py --json -o results.json <target>
+
+## Local cache
+
+```bash
+python inoue.py --cache --cache-ttl 3600 <target>
+```
+
+The default cache is `~/.cache/inoue/cache.db`; use `--cache-path` to override it.
+
+## CVE awareness
+
+```bash
+python inoue.py --cve <target>
+```
+
+This uses the bundled offline dataset and reports informational matches only.
+
+Refresh the local dataset explicitly from an NVD JSON feed:
+
+```bash
+python inoue.py update-cve
+```
+
+Use `--source-url` for a reviewed feed mirror and `-o` to write a separate dataset file.
+
+## Nuclei export
+
+```bash
+python inoue.py --nuclei-out nuclei-targets.json <target>
+```
+
+The export is a JSON mapping of normalized technology tags to target URLs.
+
+## Plugins
+
+Place a Python plugin defining `run(result)` in `modules/` or `~/.config/inoue/modules/`, or pass `--plugin-dir PATH`.
 ```
 
 ## Worker count

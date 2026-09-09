@@ -6,6 +6,7 @@ Core scanning engine - fetches target and runs all detections concurrently.
 """
 
 import os
+import asyncio
 import re
 import socket
 import ssl
@@ -22,6 +23,8 @@ except ImportError:  # pragma: no cover - optional dependency
     whois = None
 
 import httpx
+from core.cache import ScanCache
+from core.cve import correlate_cves, load_cve_dataset
 
 from fingerprints.signatures import (
     COMPILED_SIGNATURES,
@@ -43,6 +46,7 @@ class Detection:
     version: Optional[str] = None
     confidence: str = "high"  # high / medium / low
     evidence: str = ""
+    cves: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -279,6 +283,7 @@ def build_recon_plan(requested: Optional[list[str]] = None) -> dict:
         "active": False,
         "passive": False,
         "company": False,
+        "cve": False,
     }
     if not requested:
         modules.update({"headers": True, "tech": True, "smart": True})
@@ -294,6 +299,7 @@ def build_recon_plan(requested: Optional[list[str]] = None) -> dict:
     active_recon = "active" in selected or "active-recon" in selected or "active_recon" in selected
     passive_recon = "passive" in selected or "passive-recon" in selected or "passive_recon" in selected
     company_intel = "company" in selected or "site" in selected or "organization" in selected
+    cve_correlation = "cve" in selected or "cves" in selected
 
     for key in modules:
         modules[key] = full_recon or key in selected
@@ -312,6 +318,8 @@ def build_recon_plan(requested: Optional[list[str]] = None) -> dict:
     if company_intel:
         modules["company"] = True
         modules["extra"] = True
+    if cve_correlation:
+        modules["cve"] = True
 
     if fast_scan:
         modules.update({
@@ -435,7 +443,7 @@ def _guess_subdomains(hostname: str) -> list[str]:
 def _fetch_passive_subdomains(hostname: str) -> list[str]:
     names = []
     try:
-        with httpx.Client(timeout=3, verify=False) as client:
+        with httpx.Client(timeout=3, verify=True) as client:
             response = client.get(f"https://crt.sh/?q=%25.{hostname}&output=json", timeout=4)
             if response.status_code == 200:
                 data = response.json()
@@ -527,7 +535,7 @@ def _extract_html_intel(body: str) -> dict:
 def _fetch_public_intel(hostname: str, body: str = "") -> dict:
     intel = {}
     try:
-        with httpx.Client(timeout=5, verify=False) as client:
+        with httpx.Client(timeout=5, verify=True) as client:
             for url in [
                 f"https://dns.google/resolve?name={hostname}&type=A",
                 f"https://dns.google/resolve?name={hostname}&type=TXT",
@@ -614,6 +622,183 @@ def build_service_summary(result: ScanResult) -> list[dict]:
     return summary
 
 
+def _serialize_scan_result(result: ScanResult) -> dict:
+    return {
+        "url": result.url,
+        "final_url": result.final_url,
+        "status_code": result.status_code,
+        "response_time_ms": result.response_time_ms,
+        "ip": result.ip,
+        "server": result.server,
+        "technologies": [d.__dict__ for d in result.technologies],
+        "headers": result.headers,
+        "enriched": result.enriched,
+        "error": result.error,
+    }
+
+
+def _deserialize_scan_result(payload: dict) -> ScanResult:
+    result = ScanResult(
+        url=payload.get("url", ""),
+        final_url=payload.get("final_url", ""),
+        status_code=payload.get("status_code", 0),
+        response_time_ms=payload.get("response_time_ms", 0),
+        ip=payload.get("ip", ""),
+        server=payload.get("server", ""),
+        headers=payload.get("headers", {}),
+        enriched=payload.get("enriched", {}),
+        error=payload.get("error"),
+    )
+    result.technologies = [Detection(**item) for item in payload.get("technologies", [])]
+    return result
+
+
+def _correlate_detection_cves(detections: list[Detection], dataset_path: Optional[str] = None) -> None:
+    dataset = load_cve_dataset(dataset_path)
+    for detection in detections:
+        detection.cves = correlate_cves(detection.name, detection.version, dataset)
+
+
+async def _async_scan_target(
+    client: httpx.AsyncClient,
+    url: str,
+    timeout: int,
+    follow_redirects: bool,
+    modules: Optional[list[str]] = None,
+    plugin_dirs: Optional[list[str]] = None,
+    progress: Optional[Callable[[str], None]] = None,
+) -> ScanResult:
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+
+    headers_to_send = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Accept-Encoding": "gzip, deflate",
+        "Connection": "close",
+    }
+    parsed = urlparse(url)
+    result = ScanResult(url=url, final_url=url, status_code=0, response_time_ms=0)
+    started = time.perf_counter()
+
+    try:
+        response = await client.get(
+            url,
+            headers=headers_to_send,
+            follow_redirects=follow_redirects,
+            timeout=timeout,
+        )
+    except httpx.ConnectError:
+        if not url.startswith("https://"):
+            result.error = "connection failed"
+            return result
+        try:
+            response = await client.get(
+                url.replace("https://", "http://", 1),
+                headers=headers_to_send,
+                follow_redirects=follow_redirects,
+                timeout=timeout,
+            )
+        except Exception as exc:
+            result.error = str(exc)
+            return result
+    except Exception as exc:
+        result.error = str(exc)
+        return result
+
+    result.response_time_ms = round((time.perf_counter() - started) * 1000, 1)
+    result.final_url = str(response.url)
+    result.status_code = response.status_code
+    result.headers = dict(response.headers)
+    result.server = result.headers.get("server", "")
+    cookies = {key: value for key, value in response.cookies.items()}
+    result.technologies = run_fingerprints(
+        result.headers,
+        cookies,
+        response.text,
+        url=result.final_url,
+        progress=progress,
+    )
+    if "cve" in (modules or []) or "cves" in (modules or []):
+        _correlate_detection_cves(result.technologies)
+    result.ip = _resolve_ip(parsed.hostname or "")
+    result.enriched = {
+        "services": build_service_summary(result),
+        "recon": build_recon_summary(result),
+        "service_hints": [
+            item for item in build_recon_summary(result) if item.get("service_hints")
+        ],
+    }
+    from core.plugins import run_plugins
+    plugin_results = run_plugins(result, plugin_dirs, progress)
+    if plugin_results:
+        result.enriched["plugins"] = plugin_results
+    return result
+
+
+async def scan_many(
+    targets: list[str],
+    timeout: int = 10,
+    follow_redirects: bool = True,
+    dns: bool = True,
+    ssl_check: bool = True,
+    api_key: Optional[str] = None,
+    modules: Optional[list[str]] = None,
+    workers: int = 5,
+    rate_limit: Optional[float] = None,
+    cache_path: Optional[str] = None,
+    cache_ttl: int = 86400,
+    plugin_dirs: Optional[list[str]] = None,
+    progress: Optional[Callable[[str], None]] = None,
+) -> list[ScanResult]:
+    """Scan multiple targets concurrently using one shared async HTTP client."""
+    if not targets:
+        return []
+
+    semaphore = asyncio.Semaphore(max(1, workers))
+    cache = ScanCache(cache_path, cache_ttl) if cache_path else None
+    host_locks: dict[str, asyncio.Lock] = {}
+    host_last_request: dict[str, float] = {}
+
+    async def wait_for_host_rate(target: str):
+        if not rate_limit or rate_limit <= 0:
+            return
+        normalized = target if target.startswith(("http://", "https://")) else f"https://{target}"
+        hostname = urlparse(normalized).hostname or normalized
+        lock = host_locks.setdefault(hostname, asyncio.Lock())
+        async with lock:
+            interval = 1 / rate_limit
+            now = time.monotonic()
+            delay = interval - (now - host_last_request.get(hostname, 0))
+            if delay > 0:
+                await asyncio.sleep(delay)
+            host_last_request[hostname] = time.monotonic()
+
+    async def _scan_one(target: str) -> ScanResult:
+        async with semaphore:
+            if progress:
+                progress(f"starting {target}")
+            if cache:
+                cached = cache.get(target, "scan")
+                if cached:
+                    if progress:
+                        progress(f"using cached scan for {target}")
+                    return _deserialize_scan_result(cached)
+            await wait_for_host_rate(target)
+            result = await _async_scan_target(client, target, timeout, follow_redirects, modules, plugin_dirs, progress)
+            if cache and not result.error:
+                cache.set(target, "scan", _serialize_scan_result(result))
+            return result
+
+    async with httpx.AsyncClient(verify=False) as client:
+        tasks = [asyncio.create_task(_scan_one(target)) for target in targets]
+        return list(await asyncio.gather(*tasks))
+
+
+async_scan_many = scan_many
+
+
 def build_recon_summary(result: ScanResult) -> list[dict]:
     services = []
     for tech in result.technologies:
@@ -648,7 +833,7 @@ def _enrich_with_external_services(hostname: str, technology_names: list[str], a
     try:
         endpoint = os.getenv("INOUE_ENRICHMENT_URL", "https://api.technitium.com")
         headers = {"Authorization": f"Bearer {api_key}"}
-        with httpx.Client(timeout=5, verify=False) as client:
+        with httpx.Client(timeout=5, verify=True) as client:
             response = client.get(f"{endpoint}/services/{hostname}", headers=headers)
             if response.status_code == 200:
                 data = response.json()
@@ -866,6 +1051,7 @@ def scan(
     ssl_check: bool = True,
     api_key: Optional[str] = None,
     modules: Optional[list[str]] = None,
+    plugin_dirs: Optional[list[str]] = None,
     progress: Optional[Callable[[str], None]] = None,
 ) -> ScanResult:
     def report(message: str):
@@ -925,6 +1111,8 @@ def scan(
             body = resp.text
             report(f"response received {result.status_code}")
             result.technologies = run_fingerprints(resp_headers, cookies, body, url=http_url, progress=progress)
+            if "cve" in (modules or []) or "cves" in (modules or []):
+                _correlate_detection_cves(result.technologies)
         except Exception as e:
             report(f"http error: {e}")
             result.error = str(e)
@@ -1019,5 +1207,10 @@ def scan(
         result.extra_intel.setdefault("company", {})
         result.extra_intel["company"].update(company_intel)
         result.enriched.setdefault("company", company_intel)
+
+    from core.plugins import run_plugins
+    plugin_results = run_plugins(result, plugin_dirs, progress)
+    if plugin_results:
+        result.enriched["plugins"] = plugin_results
 
     return result

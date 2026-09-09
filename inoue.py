@@ -9,6 +9,7 @@ Repository: https://github.com/alhamrizvi-cloud/Inoue
 """
 
 import json
+import asyncio
 import concurrent.futures
 import re
 import subprocess
@@ -23,7 +24,8 @@ from rich.table import Table
 from rich import box
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
-from core.scanner import build_service_summary, scan, ScanResult
+from core.cve import refresh_cve_dataset
+from core.scanner import build_service_summary, scan, scan_many, ScanResult
 
 app = typer.Typer(help="Inoue — tech stack fingerprinting CLI", add_completion=False)
 console = Console()
@@ -114,6 +116,12 @@ def render_result(result: ScanResult, verbose: bool = False, evidence: bool = Fa
 
         console.print(table)
         console.print(f"\n  [dim]{len(service_summary)} services detected[/dim]\n")
+        cve_matches = [(tech.name, cve) for tech in result.technologies for cve in tech.cves]
+        if cve_matches:
+            console.print("  [red]── known CVEs ──────────────────────────[/red]")
+            for tech_name, cve in cve_matches:
+                console.print(f"  [red]{cve['id']}[/red] {tech_name} [{cve['severity']}] {cve['summary']}")
+            console.print()
     else:
         console.print("  [dim]no technologies detected[/dim]\n")
 
@@ -246,6 +254,40 @@ def format_update_report(fetch_output: str, pull_output: str, log_output: str, l
     return "\n".join(lines).strip()
 
 
+def load_targets(targets: Optional[list[str]], list_file: Optional[str]) -> list[str]:
+    values = list(targets or [])
+    if list_file:
+        values.extend(Path(list_file).read_text(encoding="utf-8").splitlines())
+    elif not values and not sys.stdin.isatty():
+        try:
+            values.extend(sys.stdin.read().splitlines())
+        except OSError:
+            pass
+
+    normalized = []
+    seen = set()
+    for value in values:
+        target = value.strip()
+        if not target or target.startswith("#") or target in seen:
+            continue
+        seen.add(target)
+        normalized.append(target)
+    return normalized
+
+
+def write_nuclei_export(results: list[ScanResult], output_path: str) -> None:
+    grouped: dict[str, list[str]] = {}
+    for result in results:
+        for technology in result.technologies:
+            tag = re.sub(r"[^a-z0-9]+", "-", technology.name.lower()).strip("-")
+            if not tag:
+                continue
+            grouped.setdefault(tag, [])
+            if result.final_url not in grouped[tag]:
+                grouped[tag].append(result.final_url)
+    Path(output_path).write_text(json.dumps(grouped, indent=2) + "\n", encoding="utf-8")
+
+
 def run_self_update() -> dict:
     repo_root = Path(__file__).resolve().parent
     try:
@@ -298,10 +340,25 @@ def about():
     console.print("  - python inoue.py -m full-recon https://target.example")
 
 
+@app.command("update-cve")
+def update_cve(
+    source_url: Optional[str] = typer.Option(None, "--source-url", help="Override the NVD JSON feed URL"),
+    output: Optional[str] = typer.Option(None, "-o", "--output", help="Write the refreshed dataset to FILE"),
+):
+    """Refresh the local offline CVE awareness dataset."""
+    try:
+        count = refresh_cve_dataset(source_url=source_url, output_path=output)
+        console.print(f"[green]updated[/green] CVE dataset with {count} entries")
+    except Exception as exc:
+        console.print(f"[red]update-cve failed[/red] {exc}")
+        raise typer.Exit(1)
+
+
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
     targets: Optional[list[str]] = typer.Argument(None, help="Target URLs or IPs (e.g. example.com, 10.10.11.2)"),
+    list_file: Optional[str] = typer.Option(None, "-l", "--list", help="Read one target per line from FILE"),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Show SSL, DNS, security headers, all headers"),
     evidence: bool = typer.Option(False, "-e", "--evidence", help="Show detection evidence"),
     no_dns: bool = typer.Option(False, "--no-dns", help="Skip DNS enumeration"),
@@ -309,7 +366,13 @@ def main(
     timeout: int = typer.Option(10, "-t", "--timeout", help="Request timeout in seconds"),
     json_out: bool = typer.Option(False, "--json", help="Output as JSON"),
     output: Optional[str] = typer.Option(None, "-o", "--output", help="Save JSON to file"),
+    nuclei_out: Optional[str] = typer.Option(None, "--nuclei-out", help="Write technology-tagged target groups as JSON"),
     workers: int = typer.Option(5, "-w", "--workers", help="Concurrent workers"),
+    rate_limit: Optional[float] = typer.Option(None, "--rate-limit", help="Maximum requests per second per host"),
+    cache: bool = typer.Option(False, "--cache", help="Cache repeat scan results locally"),
+    cache_path: Optional[str] = typer.Option(None, "--cache-path", help="SQLite cache path"),
+    cache_ttl: int = typer.Option(86400, "--cache-ttl", help="Cache lifetime in seconds"),
+    plugin_dir: Optional[str] = typer.Option(None, "--plugin-dir", help="Additional directory containing result plugins"),
     no_banner: bool = typer.Option(False, "--no-banner", help="Suppress banner"),
     api_key: Optional[str] = typer.Option(None, "--api-key", help="Optional API key for enrichment services"),
     modules: Optional[list[str]] = typer.Option(None, "--module", "-m", help="Select recon modules: headers, dns, ssl, whois, subdomains, mail, tech, ports, extra, fast, full-recon, or all"),
@@ -329,6 +392,7 @@ def main(
     active: bool = typer.Option(False, "--active", help="Enable active reconnaissance checks such as directories and common ports"),
     passive: bool = typer.Option(False, "--passive", help="Enable passive recon sources such as crt.sh and public intel"),
     company: bool = typer.Option(False, "--company", help="Collect site and company metadata alongside recon results"),
+    cve: bool = typer.Option(False, "--cve", help="Correlate detected versions with the local CVE dataset"),
 ):
     """
     Inoue — tech stack fingerprinting CLI
@@ -344,6 +408,30 @@ def main(
     if ctx.invoked_subcommand is not None:
         return
 
+    if targets and targets[0] == "update-cve":
+        command_args = targets[1:]
+        if "--help" in command_args or "-h" in command_args:
+            console.print("Usage: python inoue.py update-cve [--source-url URL] [-o FILE]")
+            raise typer.Exit()
+        source_url = None
+        output_path = None
+        index = 0
+        while index < len(command_args):
+            argument = command_args[index]
+            if argument == "--source-url" and index + 1 < len(command_args):
+                source_url = command_args[index + 1]
+                index += 2
+                continue
+            if argument in {"-o", "--output"} and index + 1 < len(command_args):
+                output_path = command_args[index + 1]
+                index += 2
+                continue
+            console.print(f"[red]unknown update-cve option[/red] {argument}")
+            raise typer.Exit(2)
+        update_cve(source_url=source_url, output=output_path)
+        raise typer.Exit()
+
+    targets = load_targets(targets, list_file)
     if not targets:
         typer.echo("Missing target(s).", err=True)
         raise typer.Exit(2)
@@ -351,7 +439,7 @@ def main(
     if not no_banner and not json_out:
         print_banner()
 
-    if any([service, headers, dns, ssl, whois, subdomains, mail, ports, extra, fast, full_recon, all_modules, smart, active, passive, company]) and modules is None:
+    if any([service, headers, dns, ssl, whois, subdomains, mail, ports, extra, fast, full_recon, all_modules, smart, active, passive, company, cve]) and modules is None:
         modules = []
     if modules is not None:
         modules = [m.lower() for m in modules]
@@ -390,6 +478,8 @@ def main(
         modules.append("passive")
     if company:
         modules.append("company")
+    if cve:
+        modules.append("cve")
 
     if modules == []:
         modules = None
@@ -410,29 +500,51 @@ def main(
         disable=json_out,
     ) as progress:
         tasks_map = {t: progress.add_task(f"  scanning {t}", total=None) for t in targets}
-        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = {
-                executor.submit(
-                    scan,
-                    t,
-                    timeout,
-                    True,
-                    not no_dns,
-                    not no_ssl,
-                    api_key=api_key,
-                    modules=modules,
-                    progress=make_progress_callback(t, tasks_map[t]),
-                ): t
-                for t in targets
-            }
-
-            for future in concurrent.futures.as_completed(futures):
-                target = futures[future]
+        if rate_limit or cache:
+            results.extend(asyncio.run(scan_many(
+                targets,
+                timeout=timeout,
+                dns=not no_dns,
+                ssl_check=not no_ssl,
+                api_key=api_key,
+                modules=modules,
+                workers=workers,
+                rate_limit=rate_limit,
+                cache_path=cache_path or "~/.cache/inoue/cache.db" if cache else None,
+                cache_ttl=cache_ttl,
+                plugin_dirs=[plugin_dir] if plugin_dir else None,
+            )))
+            for target in targets:
                 progress.remove_task(tasks_map[target])
-                try:
-                    results.append(future.result())
-                except Exception as e:
-                    console.print(f"  [red]error[/red] {target}: {e}")
+        else:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = {
+                    executor.submit(
+                        scan,
+                        t,
+                        timeout,
+                        True,
+                        not no_dns,
+                        not no_ssl,
+                        api_key=api_key,
+                        modules=modules,
+                        plugin_dirs=[plugin_dir] if plugin_dir else None,
+                        progress=make_progress_callback(t, tasks_map[t]),
+                    ): t
+                    for t in targets
+                }
+
+                for future in concurrent.futures.as_completed(futures):
+                    target = futures[future]
+                    progress.remove_task(tasks_map[target])
+                    try:
+                        results.append(future.result())
+                    except Exception as e:
+                        console.print(f"  [red]error[/red] {target}: {e}")
+
+    if nuclei_out:
+        write_nuclei_export(results, nuclei_out)
+        console.print(f"  [green]saved[/green] {nuclei_out}")
 
     if json_out or output:
         out = []
@@ -445,13 +557,14 @@ def main(
                 "response_time_ms": r.response_time_ms,
                 "server": r.server,
                 "technologies": [
-                    {"name": t.name, "category": t.category, "version": t.version, "evidence": t.evidence}
+                    {"name": t.name, "category": t.category, "version": t.version, "evidence": t.evidence, "cves": t.cves}
                     for t in r.technologies
                 ],
                 "dns": r.dns_records,
                 "ssl": r.ssl_info,
                 "recon": r.enriched.get("recon", []) if r.enriched else [],
                 "service_hints": r.enriched.get("service_hints", []) if r.enriched else [],
+                "plugins": r.enriched.get("plugins", {}) if r.enriched else {},
                 "error": r.error,
             })
         json_str = json.dumps(out, indent=2)
