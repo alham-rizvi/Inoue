@@ -120,6 +120,10 @@ A signature may declare `excludes` with technology names that make its generic m
 
 When multiple `Web Server` signatures match, Inoue keeps the detections and adds a note describing the conflict as a possible reverse proxy or layered deployment. This avoids silently discarding useful contradictory evidence.
 
+### 14. Fixture directories are the signature contribution contract
+
+Every fixture under `tests/fixtures/<technology>/` contains `response.html` and `headers.json`. The auto-discovered harness runs each pair through the real matcher, so catalog contributors can add regression evidence without duplicating test code. Fixture signals should use patterns that are indexed by the current tokenizer.
+
 ## How a scan executes
 
 The flow is roughly:
