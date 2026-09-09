@@ -23,8 +23,8 @@ The following are not valid CVE-worthy issues for this project unless they creat
 
 - Normal recon and fingerprinting behavior against a target host. This tool intentionally reaches out to arbitrary public hosts for enumeration.
 - Standard use of `verify=False` in a local network testing context without a real MITM condition.
-- False positives from passive or active recon against public endpoints that are expected to be observable on the internet.
 - Generic rate-limit, blocking, or anti-bot responses from third-party services.
+- Expected behavior of public endpoint discovery or surface enumeration.
 
 ## How to report
 
