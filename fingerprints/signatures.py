@@ -172,7 +172,23 @@ SIGNATURES = {
     },
     "FastAPI": {
         "html": [r"fastapi", r"/openapi\.json", r"/docs"],
+        "paths": [r"/openapi\.(?:json|yaml)", r"/docs(?:/.*)?", r"/redoc(?:/.*)?"],
         "category": "Framework",
+    },
+    "GraphQL": {
+        "html": [r"graphql", r"__schema"],
+        "paths": [r"/graphql(?:/.*)?", r"/graphiql(?:/.*)?", r"/graphql-ws(?:/.*)?"],
+        "category": "API",
+    },
+    "Swagger UI": {
+        "html": [r"swagger-ui", r"swagger"],
+        "paths": [r"/swagger(?:-ui)?(?:/.*)?", r"/docs(?:/.*)?", r"/redoc(?:/.*)?"],
+        "category": "API Docs",
+    },
+    "OpenAPI": {
+        "html": [r"openapi", r"OpenAPI"],
+        "paths": [r"/openapi\.(?:json|yaml)", r"/openapi(?:/.*)?"],
+        "category": "API Docs",
     },
     "Spring": {
         "cookies": [r"JSESSIONID"],

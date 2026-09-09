@@ -68,6 +68,19 @@ class ScannerSummaryTests(unittest.TestCase):
 
         self.assertIn("phpMyAdmin", names)
 
+    def test_run_fingerprints_detects_api_routes_and_docs(self):
+        headers = {}
+        body = ""
+
+        graphql = run_fingerprints(headers, {}, body, url="https://target.example/graphql")
+        self.assertIn("GraphQL", {d.name for d in graphql})
+
+        swagger = run_fingerprints(headers, {}, body, url="https://target.example/swagger-ui/index.html")
+        self.assertIn("Swagger UI", {d.name for d in swagger})
+
+        openapi = run_fingerprints(headers, {}, body, url="https://target.example/openapi.json")
+        self.assertIn("OpenAPI", {d.name for d in openapi})
+
     def test_run_fingerprints_detects_wordpress_plugin_signatures(self):
         headers = {}
         body = '<link rel="stylesheet" href="/wp-content/plugins/elementor/assets/css/frontend.min.css">'

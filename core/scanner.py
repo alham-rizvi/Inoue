@@ -252,6 +252,12 @@ SMART_TOKENS = {
     "jenkins": "Jenkins",
     "grafana": "Grafana",
     "kibana": "Kibana",
+    "graphql": "GraphQL",
+    "swagger": "Swagger UI",
+    "openapi": "OpenAPI",
+    "wp-json": "WordPress REST API",
+    "api-docs": "Swagger UI",
+    "docs": "Swagger UI",
 }
 
 
@@ -822,6 +828,10 @@ def run_fingerprints(headers: dict, cookies: dict, body: str, url: str = "", pro
         path_matches = [
             (r"/phpmyadmin", "phpMyAdmin", "Administration"),
             (r"/wp-admin|/wp-login\.php", "WordPress", "CMS"),
+            (r"/wp-json(?:/|$)", "WordPress REST API", "API"),
+            (r"/graphql(?:/|$)|/graphiql(?:/|$)|/graphql-ws(?:/|$)", "GraphQL", "API"),
+            (r"/swagger(?:-ui)?(?:/|$)|/docs(?:/|$)|/redoc(?:/|$)", "Swagger UI", "API Docs"),
+            (r"/openapi\.(?:json|yaml)(?:/|$)|/openapi(?:/|$)", "OpenAPI", "API Docs"),
             (r"/jenkins", "Jenkins", "Administration"),
             (r"/grafana", "Grafana", "Monitoring"),
             (r"/prometheus", "Prometheus", "Monitoring"),
