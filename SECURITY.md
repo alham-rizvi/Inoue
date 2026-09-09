@@ -1,4 +1,3 @@
-# Security Policy
 
 ## Supported versions
 
@@ -44,21 +43,5 @@ Prefer a private report channel through the maintainer contact for the repositor
 - The repository should include a changelog entry before cutting a release.
 - `git tag -a vX.Y.Z -m "Release vX.Y.Z"` is the standard format used for publication.
 
-## Codebase overview for agents and AI reviewers
 
-The repository is intentionally compact and split into a few focused modules:
-
-- `inoue.py` — CLI entry point and user-facing rendering. This is the main interface for commands, flags, JSON output, and the self-update flow.
-- `core/scanner.py` — request orchestration, fingerprint matching, DNS/SSL/WHOIS helpers, recon modules, and service summarization.
-- `fingerprints/signatures.py` — the large signature catalog and compiled lookup indexes used to identify technologies and services.
-- `tests/test_scanner.py` — behavioral regression tests covering matching logic, recon presets, CLI input flow, and updates.
-
-When reviewing for AI-assisted changes, the highest-value areas are:
-
-- fingerprint token extraction and candidate selection in `core/scanner.py`
-- signature catalog additions in `fingerprints/signatures.py`
-- CLI input validation and worker/task orchestration in `inoue.py`
-- security-sensitive behavior around outbound HTTP, TLS, and repository update commands
-
-This project does not expose a privileged server component; most security concerns are local execution safety and unsafe network assumptions, not a remote service vulnerability model.
 
