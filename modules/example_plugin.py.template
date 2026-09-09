@@ -1,0 +1,9 @@
+"""Copy this file to modules/example_plugin.py and customize it."""
+
+
+def run(result):
+    """Return JSON-serializable enrichment for one ScanResult."""
+    return {
+        "target": result.final_url,
+        "technology_count": len(result.technologies),
+    }
