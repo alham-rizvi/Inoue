@@ -45,6 +45,7 @@ class Detection:
     category: str
     version: Optional[str] = None
     confidence: str = "high"  # high / medium / low
+    confidence_score: float = 0.0
     evidence: str = ""
     cves: list[dict] = field(default_factory=list)
 
@@ -70,6 +71,7 @@ class ScanResult:
     extra_intel: dict = field(default_factory=dict)
     error: Optional[str] = None
     enriched: dict = field(default_factory=dict)
+    notes: list[str] = field(default_factory=list)
 
 
 def _normalize_version(raw: str) -> Optional[str]:
@@ -152,6 +154,26 @@ def _match_html(sig: dict, body: str) -> tuple[bool, Optional[str], str]:
             version = _extract_version(pattern.pattern if hasattr(pattern, "pattern") else str(pattern), body[m.start():m.end() + 80])
             return True, version, f"HTML: …{snippet[:60]}…"
     return False, None, ""
+
+
+def _count_html_matches(sig: dict, body: str) -> int:
+    return sum(1 for pattern in sig.get("html", []) if pattern.search(body))
+
+
+def _filter_excluded_detections(detections: list[Detection]) -> list[Detection]:
+    names = {detection.name for detection in detections}
+    return [
+        detection
+        for detection in detections
+        if not any(name in names for name in COMPILED_SIGNATURES.get(detection.name, {}).get("excludes", []))
+    ]
+
+
+def detect_contradictions(detections: list[Detection]) -> list[str]:
+    servers = [detection.name for detection in detections if detection.category == "Web Server"]
+    if len(servers) < 2:
+        return []
+    return [f"conflicting server signals: {', '.join(servers)} — possible reverse proxy"]
 
 
 def _match_scripts(sig: dict, scripts: list[str]) -> tuple[bool, Optional[str], str]:
@@ -617,6 +639,7 @@ def build_service_summary(result: ScanResult) -> list[dict]:
             "category": tech.category,
             "version": tech.version or "unknown",
             "confidence": tech.confidence,
+            "confidence_score": tech.confidence_score,
             "evidence": tech.evidence,
         })
     return summary
@@ -634,6 +657,7 @@ def _serialize_scan_result(result: ScanResult) -> dict:
         "headers": result.headers,
         "enriched": result.enriched,
         "error": result.error,
+        "notes": result.notes,
     }
 
 
@@ -648,15 +672,20 @@ def _deserialize_scan_result(payload: dict) -> ScanResult:
         headers=payload.get("headers", {}),
         enriched=payload.get("enriched", {}),
         error=payload.get("error"),
+        notes=payload.get("notes", []),
     )
     result.technologies = [Detection(**item) for item in payload.get("technologies", [])]
     return result
 
 
-def _correlate_detection_cves(detections: list[Detection], dataset_path: Optional[str] = None) -> None:
+def _correlate_detection_cves(
+    detections: list[Detection],
+    dataset_path: Optional[str] = None,
+    min_severity: Optional[str] = None,
+) -> None:
     dataset = load_cve_dataset(dataset_path)
     for detection in detections:
-        detection.cves = correlate_cves(detection.name, detection.version, dataset)
+        detection.cves = correlate_cves(detection.name, detection.version, dataset, min_severity)
 
 
 async def _async_scan_target(
@@ -666,6 +695,7 @@ async def _async_scan_target(
     follow_redirects: bool,
     modules: Optional[list[str]] = None,
     plugin_dirs: Optional[list[str]] = None,
+    cve_min_severity: Optional[str] = None,
     progress: Optional[Callable[[str], None]] = None,
 ) -> ScanResult:
     if not url.startswith(("http://", "https://")):
@@ -720,8 +750,9 @@ async def _async_scan_target(
         url=result.final_url,
         progress=progress,
     )
+    result.notes = detect_contradictions(result.technologies)
     if "cve" in (modules or []) or "cves" in (modules or []):
-        _correlate_detection_cves(result.technologies)
+        _correlate_detection_cves(result.technologies, min_severity=cve_min_severity)
     result.ip = _resolve_ip(parsed.hostname or "")
     result.enriched = {
         "services": build_service_summary(result),
@@ -751,6 +782,7 @@ async def scan_many(
     cache_ttl: int = 86400,
     plugin_dirs: Optional[list[str]] = None,
     progress: Optional[Callable[[str], None]] = None,
+    cve_min_severity: Optional[str] = None,
 ) -> list[ScanResult]:
     """Scan multiple targets concurrently using one shared async HTTP client."""
     if not targets:
@@ -786,7 +818,9 @@ async def scan_many(
                         progress(f"using cached scan for {target}")
                     return _deserialize_scan_result(cached)
             await wait_for_host_rate(target)
-            result = await _async_scan_target(client, target, timeout, follow_redirects, modules, plugin_dirs, progress)
+            result = await _async_scan_target(
+                client, target, timeout, follow_redirects, modules, plugin_dirs, cve_min_severity, progress
+            )
             if cache and not result.error:
                 cache.set(target, "scan", _serialize_scan_result(result))
             return result
@@ -988,16 +1022,24 @@ def run_fingerprints(headers: dict, cookies: dict, body: str, url: str = "", pro
                     evidence = candidate_evidence
                     break
 
-            if best_rank >= 4:
+            signal_weights = {4: 40.0, 3: 35.0, 2: 25.0, 1: 12.0, 0: 10.0}
+            score = sum(signal_weights[rank] for rank, _, _ in candidates)
+            html_matches = _count_html_matches(sig, body)
+            if html_matches > 1:
+                score = score - signal_weights[1] + signal_weights[1] * (1 + 0.7 * (html_matches - 1))
+            score *= 1 + min(0.5, 0.15 * max(0, len(candidates) - 1))
+            confidence_score = round(min(100.0, score), 1)
+
+            if confidence_score >= 70:
                 confidence = "high"
-            elif best_rank >= 3:
+            elif confidence_score >= 35:
                 confidence = "high"
-            elif best_rank >= 2:
-                confidence = "medium"
-            elif best_rank >= 1:
+            elif confidence_score >= 20:
                 confidence = "medium"
             else:
                 confidence = "low"
+        else:
+            confidence_score = 0.0
 
         if matched:
             if tech_name not in seen_names:
@@ -1006,10 +1048,12 @@ def run_fingerprints(headers: dict, cookies: dict, body: str, url: str = "", pro
                     category=category,
                     version=version,
                     confidence=confidence,
+                    confidence_score=confidence_score,
                     evidence=evidence,
                 ))
                 seen_names.add(tech_name)
                 report(f"detected {tech_name} ({category})")
+    detections = _filter_excluded_detections(detections)
     report(f"fingerprint matching complete ({len(detections)} detections)")
 
     if path:
@@ -1053,6 +1097,7 @@ def scan(
     modules: Optional[list[str]] = None,
     plugin_dirs: Optional[list[str]] = None,
     progress: Optional[Callable[[str], None]] = None,
+    cve_min_severity: Optional[str] = None,
 ) -> ScanResult:
     def report(message: str):
         if progress:
@@ -1093,6 +1138,9 @@ def scan(
 
         report(f"response received {result.status_code}")
         result.technologies = run_fingerprints(resp_headers, cookies, body, url=url, progress=progress)
+        result.notes = detect_contradictions(result.technologies)
+        if "cve" in (modules or []) or "cves" in (modules or []):
+            _correlate_detection_cves(result.technologies, min_severity=cve_min_severity)
 
     except httpx.ConnectError:
         # Try HTTP fallback
@@ -1111,8 +1159,9 @@ def scan(
             body = resp.text
             report(f"response received {result.status_code}")
             result.technologies = run_fingerprints(resp_headers, cookies, body, url=http_url, progress=progress)
+            result.notes = detect_contradictions(result.technologies)
             if "cve" in (modules or []) or "cves" in (modules or []):
-                _correlate_detection_cves(result.technologies)
+                _correlate_detection_cves(result.technologies, min_severity=cve_min_severity)
         except Exception as e:
             report(f"http error: {e}")
             result.error = str(e)

@@ -1,0 +1,10 @@
+{
+  "technologies": {
+    "Example CMS": {
+      "cats": [1],
+      "html": "Powered by Example CMS",
+      "headers": {"X-Example": "Example/(\\d+\\.\\d+)"},
+      "excludes": ["Generic CMS"]
+    }
+  }
+}

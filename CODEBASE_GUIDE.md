@@ -108,6 +108,46 @@ Plugins are Python files with a `run(result)` function in `modules/` or `~/.conf
 
 `--nuclei-out FILE` writes a JSON mapping from normalized technology tags to deduplicated final URLs, such as `{"apache": ["https://example.com"]}`.
 
+### 11. Confidence uses signal agreement
+
+Each detection retains the existing `high`/`medium`/`low` confidence label and now also exposes a bounded `confidence_score` from 0 to 100. Strong sources such as headers and meta tags receive larger base weights; repeated independent HTML matches receive a multiplicative agreement boost. This makes thresholding possible without changing the existing human-readable contract.
+
+### 12. Negative signatures suppress generic matches explicitly
+
+A signature may declare `excludes` with technology names that make its generic match misleading. Suppression happens after all candidates are matched, so specific evidence is available before a generic detection is removed. Existing signatures without this field behave unchanged.
+
+### 13. Contradictions are retained as recon notes
+
+When multiple `Web Server` signatures match, Inoue keeps the detections and adds a note describing the conflict as a possible reverse proxy or layered deployment. This avoids silently discarding useful contradictory evidence.
+
+### 14. Fixture directories are the signature contribution contract
+
+Every fixture under `tests/fixtures/<technology>/` contains `response.html` and `headers.json`. The auto-discovered harness runs each pair through the real matcher, so catalog contributors can add regression evidence without duplicating test code. Fixture signals should use patterns that are indexed by the current tokenizer.
+
+### 15. Provenance audits are read-only maintenance reports
+
+`python scripts/audit_signatures.py --stale-days N` reports signatures missing `last_verified` metadata or older than the cutoff. The audit accepts optional `since`, `source`, and `last_verified` fields without requiring a mass catalog rewrite; maintainers can update provenance incrementally as signatures are verified.
+
+### 16. CVE ranges remain local and deterministic
+
+CVE entries may use an `affected` expression such as `>=2.0,<2.4.52`. The comparator is deliberately small and dotted-version based, with no live lookup during scans. `--cve-min-severity` filters matches after range evaluation and results are sorted from critical to low.
+
+### 17. Wappalyzer imports are explicit maintenance artifacts
+
+`scripts/import_wappalyzer.py` accepts a local catalog or verified-TLS URL and normalizes it into JSON entries with `source: wappalyzer-import`. It is dry-run by default; `--write --output FILE` is required to persist the result. Review the generated entries and run the duplicate-signature checker before merging them into the catalog.
+
+### 18. Reports share one flattened result shape
+
+`result_to_dict()` is the serialization boundary for JSON and HTML output. The self-contained `.html` report reuses that shape, embeds its CSS, and includes technology confidence and CVE sections without external assets or network requests.
+
+### 19. Configuration precedence is explicit
+
+`core/config.py` loads `~/.config/inoue/config.toml`, then project-local `.inoue.toml`, with CLI values applied last. This lets teams share safe defaults while preserving command-line overrides. Configuration is limited to operational options such as rate limiting, cache settings, CVE enablement, severity, and plugin directory.
+
+### 20. Exit codes are machine-readable status
+
+Successful scans exit 0. Any target scan error exits 1. CVE matches exit 2 only when both `--cve` and `--fail-on-cve` are enabled; argument and configuration errors retain exit code 2 from Typer's existing behavior.
+
 ## How a scan executes
 
 The flow is roughly:

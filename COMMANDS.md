@@ -184,6 +184,12 @@ Save JSON to a file:
 ```bash
 python inoue.py --json -o results.json <target>
 
+Save a self-contained HTML report:
+
+```bash
+python inoue.py -o report.html <target>
+```
+
 ## Local cache
 
 ```bash
@@ -192,6 +198,19 @@ python inoue.py --cache --cache-ttl 3600 <target>
 
 The default cache is `~/.cache/inoue/cache.db`; use `--cache-path` to override it.
 
+Default operational values may be stored in `.inoue.toml` or
+`~/.config/inoue/config.toml`. Precedence is CLI flag, project config, user
+config, then built-in default. Example:
+
+```toml
+rate_limit = 2
+cache = true
+cache_ttl = 3600
+cve = true
+cve_min_severity = "high"
+plugin_dir = "./modules"
+```
+
 ## CVE awareness
 
 ```bash
@@ -199,6 +218,16 @@ python inoue.py --cve <target>
 ```
 
 This uses the bundled offline dataset and reports informational matches only.
+
+Filter CVE output by severity:
+
+```bash
+python inoue.py --cve --cve-min-severity high <target>
+```
+
+Use `--fail-on-cve` to return exit code `2` when a matching CVE is found.
+Exit code `1` indicates one or more scan errors; `0` means the scan completed
+without those conditions. Argument errors remain exit code `2`.
 
 Refresh the local dataset explicitly from an NVD JSON feed:
 
@@ -219,6 +248,21 @@ The export is a JSON mapping of normalized technology tags to target URLs.
 ## Plugins
 
 Place a Python plugin defining `run(result)` in `modules/` or `~/.config/inoue/modules/`, or pass `--plugin-dir PATH`.
+
+## Catalog maintenance
+
+Normalize a local Wappalyzer catalog in dry-run mode:
+
+```bash
+python scripts/import_wappalyzer.py wappalyzer.json
+```
+
+Persist reviewed normalized entries explicitly with `--write --output FILE`.
+Audit signature provenance with:
+
+```bash
+python scripts/audit_signatures.py --stale-days 180
+```
 ```
 
 ## Worker count
