@@ -225,6 +225,10 @@ Filter CVE output by severity:
 python inoue.py --cve --cve-min-severity high <target>
 ```
 
+Use `--fail-on-cve` to return exit code `2` when a matching CVE is found.
+Exit code `1` indicates one or more scan errors; `0` means the scan completed
+without those conditions. Argument errors remain exit code `2`.
+
 Refresh the local dataset explicitly from an NVD JSON feed:
 
 ```bash

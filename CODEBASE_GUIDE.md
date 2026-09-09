@@ -144,6 +144,10 @@ CVE entries may use an `affected` expression such as `>=2.0,<2.4.52`. The compar
 
 `core/config.py` loads `~/.config/inoue/config.toml`, then project-local `.inoue.toml`, with CLI values applied last. This lets teams share safe defaults while preserving command-line overrides. Configuration is limited to operational options such as rate limiting, cache settings, CVE enablement, severity, and plugin directory.
 
+### 20. Exit codes are machine-readable status
+
+Successful scans exit 0. Any target scan error exits 1. CVE matches exit 2 only when both `--cve` and `--fail-on-cve` are enabled; argument and configuration errors retain exit code 2 from Typer's existing behavior.
+
 ## How a scan executes
 
 The flow is roughly:

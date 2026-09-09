@@ -24,7 +24,7 @@ from core.cve import correlate_cves, refresh_cve_dataset
 from core.config import load_config
 from core.plugins import run_plugins
 from fingerprints.signatures import SIGNATURES
-from inoue import app, format_update_report, load_targets, render_html_report, write_nuclei_export
+from inoue import app, format_update_report, load_targets, render_html_report, result_exit_code, write_nuclei_export
 
 
 class ScannerSummaryTests(unittest.TestCase):
@@ -466,6 +466,22 @@ class ScannerSummaryTests(unittest.TestCase):
 
         self.assertEqual(config["rate_limit"], 1)
         self.assertTrue(config["cache"])
+
+    def test_semantic_exit_codes_distinguish_errors_and_cves(self):
+        clean = ScanResult("https://clean.example", "https://clean.example", 200, 1)
+        error = ScanResult("https://error.example", "https://error.example", 0, 1, error="timeout")
+        cve_result = ScanResult(
+            "https://vulnerable.example",
+            "https://vulnerable.example",
+            200,
+            1,
+            technologies=[Detection("Apache", "Web Server", cves=[{"id": "CVE-TEST"}])],
+        )
+
+        self.assertEqual(result_exit_code([clean], False, False), 0)
+        self.assertEqual(result_exit_code([error], False, False), 1)
+        self.assertEqual(result_exit_code([cve_result], True, True), 2)
+        self.assertEqual(result_exit_code([cve_result], True, False), 0)
 
     def test_plugins_run_and_failures_are_isolated(self):
         with TemporaryDirectory() as temp_dir:

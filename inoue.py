@@ -354,6 +354,14 @@ def render_html_report(results: list[ScanResult]) -> str:
 """.format(rows="".join(rows), cve_section=cve_section)
 
 
+def result_exit_code(results: list[ScanResult], cve_enabled: bool, fail_on_cve: bool) -> int:
+    if any(result.error for result in results):
+        return 1
+    if cve_enabled and fail_on_cve and any(technology.cves for result in results for technology in result.technologies):
+        return 2
+    return 0
+
+
 def run_self_update() -> dict:
     repo_root = Path(__file__).resolve().parent
     try:
@@ -460,6 +468,7 @@ def main(
     company: bool = typer.Option(False, "--company", help="Collect site and company metadata alongside recon results"),
     cve: Optional[bool] = typer.Option(None, "--cve/--no-cve", help="Correlate detected versions with the local CVE dataset"),
     cve_min_severity: Optional[str] = typer.Option(None, "--cve-min-severity", help="Minimum CVE severity: low, medium, high, or critical"),
+    fail_on_cve: bool = typer.Option(False, "--fail-on-cve", help="Exit with code 2 when CVEs are found"),
 ):
     """
     Inoue — tech stack fingerprinting CLI
@@ -637,6 +646,9 @@ def main(
         if output and Path(output).suffix.lower() == ".html":
             Path(output).write_text(render_html_report(results), encoding="utf-8")
             console.print(f"  [green]saved[/green] {output}")
+            exit_code = result_exit_code(results, bool(cve), fail_on_cve)
+            if exit_code:
+                raise typer.Exit(exit_code)
             return
         json_str = json.dumps([result_to_dict(result) for result in results], indent=2)
         if output:
@@ -644,6 +656,9 @@ def main(
             console.print(f"  [green]saved[/green] {output}")
         if json_out:
             print(json_str)
+        exit_code = result_exit_code(results, bool(cve), fail_on_cve)
+        if exit_code:
+            raise typer.Exit(exit_code)
         return
 
     for result in results:
@@ -653,6 +668,10 @@ def main(
             console.print(f"  [red]error[/red] {result.error}\n")
             continue
         render_result(result, verbose=verbose, evidence=evidence, modules=modules)
+
+    exit_code = result_exit_code(results, bool(cve), fail_on_cve)
+    if exit_code:
+        raise typer.Exit(exit_code)
 
 
 if __name__ == "__main__":

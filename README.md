@@ -65,6 +65,7 @@ python inoue.py --rate-limit 1 --cache target.com
 # Correlate detected versions with the local CVE dataset
 python inoue.py --cve target.com
 python inoue.py --cve --cve-min-severity high target.com
+python inoue.py --cve --fail-on-cve target.com
 
 # Refresh the local CVE dataset explicitly
 python inoue.py update-cve
