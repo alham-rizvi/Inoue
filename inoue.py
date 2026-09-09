@@ -488,6 +488,8 @@ def main(
 
     def make_progress_callback(target: str, task_id: int):
         def callback(message: str):
+            if json_out:
+                return
             console.log(f"[dim]{target}[/dim] {message}")
             progress.update(task_id, description=f"  scanning {target}: {message}")
         return callback

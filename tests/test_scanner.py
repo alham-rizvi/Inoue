@@ -1,4 +1,5 @@
 import asyncio
+import json
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -219,6 +220,20 @@ class ScannerSummaryTests(unittest.TestCase):
         self.assertIn("progress", kwargs)
         self.assertEqual(kwargs["api_key"], None)
         self.assertEqual(kwargs["modules"], None)
+
+    @patch("inoue.scan")
+    def test_cli_json_output_contains_only_json(self, mock_scan):
+        mock_scan.return_value = ScanResult(
+            url="https://example.com",
+            final_url="https://example.com",
+            status_code=200,
+            response_time_ms=1,
+        )
+
+        result = CliRunner().invoke(app, ["--json", "--no-banner", "example.com"], catch_exceptions=False)
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(json.loads(result.stdout)[0]["url"], "https://example.com")
 
     def test_summarize_whois_details_includes_company_and_contacts(self):
         summary = summarize_whois_details({
