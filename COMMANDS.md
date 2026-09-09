@@ -198,6 +198,19 @@ python inoue.py --cache --cache-ttl 3600 <target>
 
 The default cache is `~/.cache/inoue/cache.db`; use `--cache-path` to override it.
 
+Default operational values may be stored in `.inoue.toml` or
+`~/.config/inoue/config.toml`. Precedence is CLI flag, project config, user
+config, then built-in default. Example:
+
+```toml
+rate_limit = 2
+cache = true
+cache_ttl = 3600
+cve = true
+cve_min_severity = "high"
+plugin_dir = "./modules"
+```
+
 ## CVE awareness
 
 ```bash

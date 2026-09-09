@@ -89,6 +89,9 @@ python inoue.py update
 
 For a full command reference, see [COMMANDS.md](COMMANDS.md).
 
+Operational defaults can be stored in project `.inoue.toml` or user
+`~/.config/inoue/config.toml`; CLI flags always take precedence.
+
 ## Options
 
 | Flag | Description |

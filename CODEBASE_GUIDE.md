@@ -140,6 +140,10 @@ CVE entries may use an `affected` expression such as `>=2.0,<2.4.52`. The compar
 
 `result_to_dict()` is the serialization boundary for JSON and HTML output. The self-contained `.html` report reuses that shape, embeds its CSS, and includes technology confidence and CVE sections without external assets or network requests.
 
+### 19. Configuration precedence is explicit
+
+`core/config.py` loads `~/.config/inoue/config.toml`, then project-local `.inoue.toml`, with CLI values applied last. This lets teams share safe defaults while preserving command-line overrides. Configuration is limited to operational options such as rate limiting, cache settings, CVE enablement, severity, and plugin directory.
+
 ## How a scan executes
 
 The flow is roughly:

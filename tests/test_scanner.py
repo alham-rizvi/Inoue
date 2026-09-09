@@ -21,6 +21,7 @@ from core.scanner import (
     run_fingerprints,
 )
 from core.cve import correlate_cves, refresh_cve_dataset
+from core.config import load_config
 from core.plugins import run_plugins
 from fingerprints.signatures import SIGNATURES
 from inoue import app, format_update_report, load_targets, render_html_report, write_nuclei_export
@@ -452,6 +453,19 @@ class ScannerSummaryTests(unittest.TestCase):
         self.assertIn("Inoue reconnaissance report", report)
         self.assertIn("Apache", report)
         self.assertIn("CVE-TEST", report)
+
+    def test_config_uses_project_values_over_user_values(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            user_path = root / "user.toml"
+            project_path = root / "project.toml"
+            user_path.write_text("rate_limit = 2\ncache = true\n", encoding="utf-8")
+            project_path.write_text("rate_limit = 1\n", encoding="utf-8")
+
+            config = load_config(str(project_path), str(user_path))
+
+        self.assertEqual(config["rate_limit"], 1)
+        self.assertTrue(config["cache"])
 
     def test_plugins_run_and_failures_are_isolated(self):
         with TemporaryDirectory() as temp_dir:

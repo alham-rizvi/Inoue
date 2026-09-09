@@ -26,6 +26,7 @@ from rich import box
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from core.cve import refresh_cve_dataset
+from core.config import load_config
 from core.scanner import build_service_summary, scan, scan_many, ScanResult
 
 app = typer.Typer(help="Inoue — tech stack fingerprinting CLI", add_completion=False)
@@ -434,7 +435,7 @@ def main(
     nuclei_out: Optional[str] = typer.Option(None, "--nuclei-out", help="Write technology-tagged target groups as JSON"),
     workers: int = typer.Option(5, "-w", "--workers", help="Concurrent workers"),
     rate_limit: Optional[float] = typer.Option(None, "--rate-limit", help="Maximum requests per second per host"),
-    cache: bool = typer.Option(False, "--cache", help="Cache repeat scan results locally"),
+    cache: Optional[bool] = typer.Option(None, "--cache/--no-cache", help="Cache repeat scan results locally"),
     cache_path: Optional[str] = typer.Option(None, "--cache-path", help="SQLite cache path"),
     cache_ttl: int = typer.Option(86400, "--cache-ttl", help="Cache lifetime in seconds"),
     plugin_dir: Optional[str] = typer.Option(None, "--plugin-dir", help="Additional directory containing result plugins"),
@@ -457,7 +458,7 @@ def main(
     active: bool = typer.Option(False, "--active", help="Enable active reconnaissance checks such as directories and common ports"),
     passive: bool = typer.Option(False, "--passive", help="Enable passive recon sources such as crt.sh and public intel"),
     company: bool = typer.Option(False, "--company", help="Collect site and company metadata alongside recon results"),
-    cve: bool = typer.Option(False, "--cve", help="Correlate detected versions with the local CVE dataset"),
+    cve: Optional[bool] = typer.Option(None, "--cve/--no-cve", help="Correlate detected versions with the local CVE dataset"),
     cve_min_severity: Optional[str] = typer.Option(None, "--cve-min-severity", help="Minimum CVE severity: low, medium, high, or critical"),
 ):
     """
@@ -473,6 +474,22 @@ def main(
     """
     if ctx.invoked_subcommand is not None:
         return
+
+    config = load_config()
+    if rate_limit is None:
+        rate_limit = config.get("rate_limit")
+    if cache is None:
+        cache = bool(config.get("cache", False))
+    if cache_path is None:
+        cache_path = config.get("cache_path")
+    if cache_ttl == 86400 and "cache_ttl" in config:
+        cache_ttl = int(config["cache_ttl"])
+    if cve is None:
+        cve = bool(config.get("cve", False))
+    if cve_min_severity is None:
+        cve_min_severity = config.get("cve_min_severity")
+    if plugin_dir is None:
+        plugin_dir = config.get("plugin_dir")
 
     if targets and targets[0] == "update-cve":
         command_args = targets[1:]
