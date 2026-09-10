@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Iterable
 
+import httpx
+
 
 def _normalize_technologies(technologies: Iterable[str]) -> list[str]:
     items = [str(tech).strip() for tech in technologies if str(tech).strip()]
@@ -35,3 +37,26 @@ def build_discord_payload(url: str, technologies: Iterable[str], cves: Iterable[
             "color": 5814783,
         }]
     }
+
+
+def send_webhook(url: str, payload: dict, verify: bool = True, timeout: float = 10.0) -> dict:
+    """POST a payload to a user-supplied webhook URL and return the server response metadata."""
+    if not url:
+        raise ValueError("Webhook URL is required")
+
+    with httpx.Client(timeout=timeout, verify=verify) as client:
+        response = client.post(url, json=payload)
+        response.raise_for_status()
+        body = response.text
+        if body:
+            try:
+                parsed = response.json()
+            except ValueError:
+                parsed = body
+        else:
+            parsed = {}
+        return {
+            "ok": response.is_success,
+            "status_code": response.status_code,
+            "body": parsed,
+        }

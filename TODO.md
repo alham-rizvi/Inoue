@@ -23,8 +23,18 @@ Status captured on 2026-09-09 from branch `feature/best-in-class-recon`.
 - [x] B5 semantic scan exit codes
 - [x] D1 dotted-version CVE range matching
 - [x] D2 CVE severity filtering and descending severity ordering
+- [x] A4 TLS fingerprinting support with graceful fallback
 - [x] A5 Wappalyzer JSON normalization utility, dry-run by default
+- [x] A5 catalog compatibility guard for duplicate imported entries
+- [x] B1 watch loop helper for interval-based repeated scans
+- [x] B2 generic/Slack/Discord webhook payload builder and sender
+- [x] D3 EPSS score retention in local CVE correlation output
 - [x] Existing async engine, stdin/list input, rate limiting, cache, CVE refresh, export, plugins, CI, and packaging from the prior roadmap
+
+## Current verification status
+
+- Tests: `46 passed` via `python -m pytest tests/ -q`
+- Remaining release-oriented items beyond the core feature roadmap are outside the automated test suite and should be treated as distribution/packaging work rather than scanner correctness gaps.
 
 ## Tomorrow: priority order
 

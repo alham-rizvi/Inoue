@@ -744,6 +744,34 @@ def diff_scan_results(previous: ScanResult, current: ScanResult) -> dict:
     }
 
 
+def watch_scan_loop(
+    targets: list[str],
+    scan_fn: Callable[..., object],
+    interval_seconds: float = 60,
+    iterations: Optional[int] = None,
+    sleep_fn: Optional[Callable[[float], None]] = None,
+) -> list[object]:
+    """Run a scan callback repeatedly for a target list with a delay between cycles."""
+    if not targets:
+        return []
+
+    sleep = sleep_fn or time.sleep
+    cycle_count = max(1, iterations) if iterations is not None else 1
+    results: list[object] = []
+
+    for cycle_index in range(cycle_count):
+        for target in targets:
+            try:
+                result = scan_fn(target)
+            except TypeError:
+                result = scan_fn()
+            results.append(result)
+        if cycle_index < cycle_count - 1 and interval_seconds > 0:
+            sleep(interval_seconds)
+
+    return results
+
+
 async def _async_scan_target(
     client: httpx.AsyncClient,
     url: str,

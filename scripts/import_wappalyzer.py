@@ -74,6 +74,13 @@ def normalize_catalog(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
+def check_import_compatibility(current: dict[str, Any], incoming: dict[str, Any]) -> list[str]:
+    """Return names that would collide with the live Inoue signature catalog."""
+    if not isinstance(current, dict) or not isinstance(incoming, dict):
+        return []
+    return sorted(set(current) & set(incoming))
+
+
 def load_source(source: str) -> dict[str, Any]:
     if source.startswith(("http://", "https://")):
         with httpx.Client(timeout=30, verify=True, follow_redirects=True) as client:
