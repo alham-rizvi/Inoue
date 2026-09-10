@@ -220,6 +220,7 @@ Read targets from a file or stdin for shell pipelines:
 python inoue.py --list targets.txt
 cat targets.txt | python inoue.py --json
 ```
+```
 
 Limit requests per host during async batch scans:
 

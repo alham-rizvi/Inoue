@@ -46,6 +46,19 @@ class RoadmapFeatureTests(unittest.TestCase):
         self.assertIn("CVE-NEW", diff["cve_changes"][0]["id"])
         self.assertIn("8443", str(diff["port_changes"]))
 
+    def test_diff_scan_results_detects_expiring_iso_certificate(self):
+        current = ScanResult(
+            url="https://example.com",
+            final_url="https://example.com",
+            status_code=200,
+            response_time_ms=1,
+            ssl_info={"notAfter": "2026-09-20T12:00:00Z"},
+        )
+
+        diff = diff_scan_results(ScanResult("https://example.com", "https://example.com", 200, 1), current)
+
+        self.assertEqual(diff["certificate_expiry"][0]["expires"], "2026-09-20T12:00:00Z")
+
     def test_tls_fingerprint_matches_known_fixture_table(self):
         fp = fingerprint_tls("cloudflare", "TLS_AES_256_GCM_SHA384", "TLSv1.3")
 

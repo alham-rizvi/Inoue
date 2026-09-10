@@ -9,6 +9,7 @@ scanning read-only:
 - generic, Slack, and Discord webhook payloads with verified HTTPS delivery;
 - best-effort TLS metadata and known CDN/WAF fingerprint matching;
 - optional FastAPI endpoints for health, signature, single-target, and batch scans;
+- async/API scans preserve selected recon modules, use bounded request validation, and return the full scan result contract;
 - Wappalyzer catalog normalization with duplicate compatibility checks;
 - offline CVE correlation with optional EPSS scores and explicit refresh only;
 - Python 3.12 CI coverage and PyPI package publishing through GitHub Actions.

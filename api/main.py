@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 from collections import defaultdict
@@ -26,8 +27,8 @@ from core.scanner import scan, scan_many
 
 
 class ScanRequest(BaseModel):
-    target: str = Field(..., description="Target URL or hostname")
-    timeout: int = 10
+    target: str = Field(..., min_length=1, description="Target URL or hostname")
+    timeout: int = Field(10, ge=1, le=120)
     follow_redirects: bool = True
     modules: Optional[list[str]] = None
     cve_min_severity: Optional[str] = None
@@ -35,12 +36,12 @@ class ScanRequest(BaseModel):
 
 class BatchRequest(BaseModel):
     targets: list[str] = Field(..., min_length=1)
-    timeout: int = 10
+    timeout: int = Field(10, ge=1, le=120)
     follow_redirects: bool = True
     modules: Optional[list[str]] = None
     cve_min_severity: Optional[str] = None
-    workers: int = 5
-    rate_limit: Optional[float] = None
+    workers: int = Field(5, ge=1, le=50)
+    rate_limit: Optional[float] = Field(None, gt=0, le=100)
 
 
 def create_app() -> Optional[FastAPI]:
@@ -80,21 +81,44 @@ def create_app() -> Optional[FastAPI]:
         from fingerprints.signatures import SIGNATURES
         return {"count": len(SIGNATURES), "signatures": sorted(SIGNATURES.keys())[:25]}
 
+    def serialize_result(result):
+        return {
+            "url": result.url,
+            "final_url": result.final_url,
+            "ip": result.ip,
+            "status_code": result.status_code,
+            "response_time_ms": result.response_time_ms,
+            "server": result.server,
+            "technologies": [tech.__dict__ for tech in result.technologies],
+            "headers": result.headers,
+            "dns": result.dns_records,
+            "ssl": result.ssl_info,
+            "tls_fingerprint": result.tls_fingerprint,
+            "whois": result.whois_info,
+            "whois_summary": result.whois_summary,
+            "subdomains": result.subdomains,
+            "mail_records": result.mail_records,
+            "open_ports": result.open_ports,
+            "directories": result.directories,
+            "extra_intel": result.extra_intel,
+            "recon": result.enriched.get("recon", []) if result.enriched else [],
+            "service_hints": result.enriched.get("service_hints", []) if result.enriched else [],
+            "plugins": result.enriched.get("plugins", {}) if result.enriched else {},
+            "notes": result.notes,
+            "error": result.error,
+            "cache_hit": result.cache_hit,
+        }
+
     async def scan_target(payload: ScanRequest):
-        result = scan(
+        result = await asyncio.to_thread(
+            scan,
             payload.target,
             timeout=payload.timeout,
             follow_redirects=payload.follow_redirects,
             modules=payload.modules,
             cve_min_severity=payload.cve_min_severity,
         )
-        return {
-            "url": result.final_url,
-            "status_code": result.status_code,
-            "technologies": [tech.__dict__ for tech in result.technologies],
-            "notes": result.notes,
-            "error": result.error,
-        }
+        return serialize_result(result)
 
     async def scan_batch(payload: BatchRequest):
         if len(payload.targets) > max_batch_size:
@@ -109,16 +133,7 @@ def create_app() -> Optional[FastAPI]:
             cve_min_severity=payload.cve_min_severity,
         )
         return {
-            "results": [
-                {
-                    "url": item.final_url,
-                    "status_code": item.status_code,
-                    "technologies": [tech.__dict__ for tech in item.technologies],
-                    "notes": item.notes,
-                    "error": item.error,
-                }
-                for item in results
-            ]
+            "results": [serialize_result(item) for item in results]
         }
 
     app.get("/health")(health)

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Optional
 
@@ -42,7 +43,12 @@ def run_plugins(
                 runner = getattr(module, "run", None)
                 if not callable(runner):
                     raise TypeError("plugin must define run(result)")
-                outputs[plugin_name] = runner(result)
+                output = runner(result)
+                try:
+                    json.dumps(output)
+                except (TypeError, ValueError) as exc:
+                    raise TypeError(f"plugin output is not JSON serializable: {exc}") from exc
+                outputs[plugin_name] = output
                 if progress:
                     progress(f"plugin {plugin_name} completed")
             except Exception as exc:
