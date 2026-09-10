@@ -6,6 +6,9 @@
   reverse proxies, and forwarding proxies with header-based version detection.
 - Added regression coverage for Kestrel, Node.js HTTP, and server-family catalog
   sizing; the live catalog now contains 63 server-family entries.
+- Added optional MCP catalog and read-only scan tools through `inoue-mcp`.
+- Added editable Rich terminal text styles, category colors, and compact,
+  standard, or wide table layouts through TOML configuration.
 
 ## 1.1.2 - 2026-09-10
 

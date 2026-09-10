@@ -28,9 +28,11 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from core.cve import refresh_cve_dataset
 from core.config import load_config
 from core.scanner import build_service_summary, scan, scan_many, ScanResult
+from core.terminal import TerminalSettings, create_console, load_terminal_settings
 
 app = typer.Typer(help="Inoue — tech stack fingerprinting CLI", add_completion=False)
-console = Console()
+terminal_settings = TerminalSettings()
+console = create_console(terminal_settings)
 
 
 def load_app_version() -> str:
@@ -96,17 +98,18 @@ def render_result(result: ScanResult, verbose: bool = False, evidence: bool = Fa
         for t in result.technologies:
             by_category[t.category].append(t)
 
-        table = Table(box=None, show_header=True, header_style="dim", padding=(0, 2, 0, 0), show_edge=False)
-        table.add_column("category", width=20)
-        table.add_column("technology", width=22)
-        table.add_column("version", width=14)
+        geometry = terminal_settings.table_geometry
+        table = Table(box=None, show_header=True, header_style="dim", padding=geometry["padding"], show_edge=False)
+        table.add_column("category", width=geometry["category"])
+        table.add_column("technology", width=geometry["technology"])
+        table.add_column("version", width=geometry["version"])
         table.add_column("confidence", width=12)
         if evidence:
             table.add_column("evidence", width=55)
 
         for category in sorted(by_category.keys()):
             techs = by_category[category]
-            color = CATEGORY_COLORS.get(category, "white")
+            color = terminal_settings.colors.get(category, CATEGORY_COLORS.get(category, "white"))
             for i, t in enumerate(techs):
                 cat_label = f"[dim]{category}[/dim]" if i == 0 else ""
                 ver_label = f"[dim]{t.version or 'unknown'}[/dim]"
@@ -487,6 +490,9 @@ def main(
         return
 
     config = load_config()
+    global console, terminal_settings
+    terminal_settings = load_terminal_settings(config)
+    console = create_console(terminal_settings)
     if rate_limit is None:
         rate_limit = config.get("rate_limit")
     if cache is None:

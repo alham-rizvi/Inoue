@@ -21,16 +21,20 @@ api = [
 	"fastapi>=0.111",
 	"uvicorn>=0.30",
 ]
+mcp = [
+	"mcp>=1.0",
+]
 
 [project.scripts]
 inoue = "inoue:app"
+inoue-mcp = "mcp_server:main"
 
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-py-modules = ["inoue"]
+py-modules = ["inoue", "mcp_server"]
 
 [tool.setuptools.packages.find]
 include = ["core*", "fingerprints*", "api*", "data*"]

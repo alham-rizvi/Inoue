@@ -28,6 +28,16 @@ Install the optional API dependencies with:
 python -m pip install "inoue[api]==1.1.2"
 ```
 
+Install optional MCP support with:
+
+```bash
+python -m pip install "inoue[mcp]"
+inoue-mcp
+```
+
+The MCP server uses stdio and exposes local catalog search, catalog summaries,
+and the existing read-only scan path for MCP clients.
+
 <img width="430" height="63" alt="image" src="https://github.com/user-attachments/assets/3ebec879-7fdb-4ee4-9def-277e95b1c406" />
 
 Inoue is a fast, open-source recon-oriented tech stack fingerprinting CLI. It is designed to identify the technologies exposed by a target website or service from the terminal, with a broad signature catalog that covers servers, runtimes, CMS platforms, ecommerce stacks, frameworks, JavaScript libraries, analytics tools, payment providers, admin panels, cloud/self-hosted management surfaces, VPN portals, and IoT/admin devices.
@@ -121,6 +131,19 @@ For a full command reference, see [COMMANDS.md](COMMANDS.md).
 
 Operational defaults can be stored in project `.inoue.toml` or user
 `~/.config/inoue/config.toml`; CLI flags always take precedence.
+
+Terminal presentation can be customized in the same TOML file:
+
+```toml
+[terminal]
+text_style = "bright_white"
+layout = "wide" # compact, standard, or wide
+
+[terminal.colors]
+"Web Server" = "bright_cyan"
+"Application Server" = "green"
+"Other" = "grey70"
+```
 
 ## Options
 

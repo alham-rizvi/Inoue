@@ -4,6 +4,7 @@ from unittest.mock import Mock, patch
 from core.cve import correlate_cves
 from core.scanner import Detection, ScanResult, diff_scan_results, watch_scan_loop
 from core.tls_fingerprint import fingerprint_tls, known_tls_fingerprints
+from core.terminal import load_terminal_settings
 from core.webhooks import (
     build_discord_payload,
     build_generic_payload,
@@ -11,6 +12,7 @@ from core.webhooks import (
     send_webhook,
 )
 from scripts.import_wappalyzer import check_import_compatibility
+from mcp_server import search_signatures
 
 
 class RoadmapFeatureTests(unittest.TestCase):
@@ -105,6 +107,25 @@ class RoadmapFeatureTests(unittest.TestCase):
 
         self.assertTrue(payload)
         mock_client.return_value.__enter__.return_value.post.assert_called_once()
+
+    def test_terminal_settings_allow_editable_colors_and_layout(self):
+        settings = load_terminal_settings({
+            "terminal": {
+                "text_style": "bright_white",
+                "layout": "wide",
+                "colors": {"Web Server": "bright_cyan"},
+            }
+        })
+
+        self.assertEqual(settings.text_style, "bright_white")
+        self.assertEqual(settings.layout, "wide")
+        self.assertEqual(settings.colors["Web Server"], "bright_cyan")
+
+    def test_mcp_signature_search_is_catalog_only(self):
+        matches = search_signatures("kestrel", category="Application Server")
+
+        self.assertEqual(matches[0]["name"], "Kestrel")
+        self.assertEqual(matches[0]["category"], "Application Server")
 
 
 if __name__ == "__main__":

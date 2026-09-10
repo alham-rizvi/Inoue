@@ -156,6 +156,14 @@ entries live in `fingerprints/web_server_catalog.py`. These entries prefer
 growth remains reviewable and version extraction remains deterministic. The
 catalog is merged before the runtime indexes are compiled.
 
+### 22. Terminal themes and MCP are optional adapters
+
+`core/terminal.py` translates the `[terminal]` section of TOML configuration
+into Rich presentation settings without changing scan results or JSON output.
+`mcp_server.py` is an optional stdio adapter; it exposes catalog search,
+category counts, and the existing read-only scanner while remaining import-safe
+when the `mcp` package is not installed.
+
 ## How a scan executes
 
 The flow is roughly:

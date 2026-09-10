@@ -31,3 +31,16 @@ curl -X POST http://localhost:8000/scan/batch \
 ```
 
 Set `INOUE_API_KEY` and send the `X-API-Key` header when the API is configured to require authentication.
+
+## MCP integration
+
+For MCP-compatible clients, install the optional extra and launch the stdio
+server:
+
+```bash
+python -m pip install "inoue[mcp]"
+inoue-mcp
+```
+
+The MCP tools are `search_catalog`, `get_catalog_summary`, and
+`scan_read_only`. They reuse the local signature catalog and read-only scanner.

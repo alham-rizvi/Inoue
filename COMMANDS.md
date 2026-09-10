@@ -26,6 +26,37 @@ python -m uvicorn api.main:app --host 0.0.0.0 --port 8000
 
 See [API.md](API.md) for endpoint payloads, authentication, and batch limits.
 
+## MCP server
+
+Install the optional dependency and start the stdio MCP server:
+
+```bash
+python -m pip install "inoue[mcp]"
+inoue-mcp
+```
+
+Available tools are `search_catalog`, `get_catalog_summary`, and
+`scan_read_only`. The server does not expose exploit, write, or credential
+automation operations.
+
+## Terminal presentation
+
+Set editable colors and layout in `.inoue.toml` or
+`~/.config/inoue/config.toml`:
+
+```toml
+[terminal]
+text_style = "bright_white"
+layout = "compact"
+
+[terminal.colors]
+"Web Server" = "bright_cyan"
+"CMS" = "yellow"
+```
+
+Use `compact`, `standard`, or `wide` layouts. CLI flags continue to override
+operational configuration; terminal presentation settings only affect output.
+
 ## Run the scanner
 
 ```bash
