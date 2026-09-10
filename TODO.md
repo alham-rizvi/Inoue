@@ -113,3 +113,123 @@ python -m pytest tests/ -q
 ```
 
 Do not push `main` from this roadmap branch. Push the feature branch only when the review-ready implementation is requested.
+
+---
+
+# Inoue Roadmap TODO - v2 (expanded, verification-first)
+
+Status captured: 2026-09-10, building on branch `feature/best-in-class-recon`.
+
+## Reconcile before doing anything else
+
+The prior status doc lists A4, A5, B1, B2, and D3 as both completed and pending. Resolve that contradiction before adding new feature work.
+
+- [ ] Audit the actual diff and commits on `feature/best-in-class-recon` for A4, A5, B1, B2, and D3.
+- [ ] Rewrite pending entries to describe only missing hardening or verification work.
+- [ ] Investigate any completed checkbox without a corresponding implementation commit.
+- [ ] Run `git log --oneline feature/best-in-class-recon` and cross-check every completed item against a commit.
+- [ ] Make the Completed and Tomorrow sections mutually exclusive and accurate.
+
+## Verification checklist
+
+- [ ] Run `python -m pytest tests/ -q --collect-only` and confirm the expected test count.
+- [ ] Run `python -m pytest tests/ -rs` and review skips.
+- [ ] Search tests for swallowed exceptions and vacuous assertions: `except Exception: pass` and `assert True`.
+- [ ] Manually exercise A1 confidence scoring against multiple real sites and confirm differentiated scores.
+- [ ] Exercise A2 generic/specific suppression with a constructed signal pair.
+- [ ] Confirm A3 contradiction notes do not appear on ordinary scans.
+- [ ] Run the fixture harness and perform a mutation spot-check for A6.
+- [ ] Run the A7 provenance audit and review stale-signature output.
+- [ ] Generate and open a B3 HTML report in a browser.
+- [ ] Verify B4 CLI, project config, user config, and built-in precedence in both directions.
+- [ ] Verify B5 shell exit codes for success, scan error, and fail-on-CVE scenarios.
+- [ ] Test D1 with messy versions such as `2.4.52-ubuntu`, `v1.2`, and `1.2.3+build4`.
+- [ ] Confirm D2 filtering retains critical findings when filtering at medium severity.
+- [ ] Record which checks pass, reveal real bugs, or reveal test-only bugs.
+- [ ] Block new subsystem work when its prerequisite verification reveals a real bug.
+
+## Dead-end and technical-debt sweep
+
+- [ ] Triage `TODO`, `FIXME`, and `XXX` comments in `core/`, `inoue.py`, and `api/`.
+- [ ] Search for orphaned code, unused imports, and half-wired plugin or cache paths.
+- [ ] Compare every CLI flag from `python inoue.py --help` with `COMMANDS.md`.
+- [ ] Confirm each subsystem has tests that exercise real code paths: cache, CVE, plugins, TLS, and API.
+- [ ] Run `python -m pytest tests/ -q -W error` and resolve dependency deprecation warnings.
+
+## Eight-week execution plan
+
+### Week 1 - Reconciliation and verification
+
+- [ ] Complete the reconciliation and verification checklists above.
+- [ ] Fix real bugs and incorrect test assertions found during the audit.
+- [ ] Update `CODEBASE_GUIDE.md` and add a three-line status entry to the log below.
+
+### Week 2 - A4 TLS fingerprinting hardening
+
+- [ ] Capture reproducible fixtures for Cloudflare, Akamai, Fastly, and CloudFront where network access permits.
+- [ ] Test dependency-missing, known-match, and unknown-fingerprint paths.
+- [ ] Document proxy and TLS-terminating load-balancer limitations in `CODEBASE_GUIDE.md`.
+
+### Week 3 - A5 catalog integration and B1 diff helper
+
+- [ ] Complete the Wappalyzer workflow: dry-run diff, human review, explicit apply, deduplication, compilation, and detection test.
+- [ ] Test technology additions, removals, version changes, new and resolved CVEs, port changes, and certificate states.
+- [ ] Decide and document which changes are actionable notifications.
+
+### Week 4 - B1 watch loop and B2 webhooks
+
+- [ ] Wire the watch loop to the diff helper with a bounded foreground execution model.
+- [ ] Manually validate a webhook payload against a throwaway endpoint without committing credentials.
+- [ ] Keep daemon and service-manager integration out of scope.
+
+### Week 5 - C1 library and C2 API foundation
+
+- [ ] Import core modules in an environment without Typer or Rich installed.
+- [ ] Validate `/health`, `/signatures`, and `/scan` using mocked scanner calls.
+- [ ] Document API-key authentication and in-memory rate-limit limitations.
+
+### Week 6 - C2 batch, C3 docs, and C4 Docker
+
+- [ ] Enforce and test the API batch maximum.
+- [ ] Run every `API.md` curl example against a local server.
+- [ ] Run `docker build` when Docker is available, otherwise record the limitation explicitly.
+
+### Week 7 - D3 EPSS and CVE hardening
+
+- [ ] Keep EPSS refresh restricted to the explicit `update-cve` workflow.
+- [ ] Revisit messy-version and severity-filter behavior.
+- [ ] Add a CVE dataset staleness warning if the product policy supports it.
+
+### Week 8 - Documentation and release review
+
+- [ ] Update README, COMMANDS.md, CONTRIBUTING.md, and CODEBASE_GUIDE.md.
+- [ ] Perform a fresh-clone install and end-to-end CLI run against several safe targets.
+- [ ] Exercise JSON, HTML, cache, CVE, watch, API, and Docker workflows where available.
+- [ ] Produce a feature summary table with implementation and hands-on verification status.
+- [ ] Decide go/no-go for the next release and list blockers if not ready.
+
+## Monthly maintenance cadence
+
+- [ ] Week 1: audit signatures with `scripts/audit_signatures.py --stale-days 90`.
+- [ ] Week 2: refresh the CVE dataset and review TLS fixture drift.
+- [ ] Week 3: triage catalog contributions using the fixture harness.
+- [ ] Week 4: update dependencies, run the full suite with `-W error`, and review security advisories.
+
+## Commit discipline
+
+```bash
+python -m pytest tests/ -q
+git diff --check
+git commit -m "<focused message>"
+python -m pytest tests/ -q
+```
+
+Never mark a checkbox complete without a corresponding commit hash. Add the short hash beside completed items, for example:
+
+```markdown
+- [x] A1 signal-agreement confidence scoring (`a1b2c3d`)
+```
+
+## Roadmap v2 log
+
+- 2026-09-10: Added the verification-first reconciliation plan after detecting conflicting completed and pending status entries.
