@@ -70,6 +70,29 @@ class ScannerSummaryTests(unittest.TestCase):
         self.assertIn("Apache", names)
         self.assertIn("Jenkins", names)
 
+    def test_run_fingerprints_detects_curated_application_server_headers(self):
+        detections = run_fingerprints(
+            {"Server": "Kestrel", "X-Powered-By": "Node.js/22.1.0"},
+            {},
+            "",
+        )
+        detected = {item.name: item for item in detections}
+
+        self.assertIn("Kestrel", detected)
+        self.assertIn("Node.js HTTP", detected)
+        self.assertEqual(detected["Node.js HTTP"].version, "22.1.0")
+
+    def test_web_server_catalog_has_at_least_forty_curated_entries(self):
+        web_server_categories = {
+            "Web Server", "Application Server", "Proxy", "Reverse Proxy"
+        }
+        curated_names = [
+            name for name, signature in SIGNATURES.items()
+            if signature.get("category") in web_server_categories
+        ]
+
+        self.assertGreaterEqual(len(curated_names), 40)
+
     def test_run_fingerprints_detects_services_from_url_path(self):
         headers = {}
         body = ""

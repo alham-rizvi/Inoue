@@ -43,6 +43,7 @@ Repository: https://github.com/alhamrizvi-cloud/Inoue
 - Broad fingerprint coverage for web servers, languages, frameworks, CMS, ecommerce platforms, JS libraries, analytics, payments, CDNs, WAFs, and more
 - An expanded catalog with 600+ services, cloud portals, ICS/SCADA surfaces, admin panels, network appliances, and self-hosted platforms
 - Detection from HTTP headers, cookies, HTML, script tags, meta tags, and URL paths
+- Curated web-server coverage for common application servers, reverse proxies, and forwarding proxies
 - Recon-oriented service hints for exposed admin panels, management consoles, cloud portals, and self-hosted applications
 - Version-aware detection where the signature supports it
 - SSL/TLS inspection with certificate metadata and handshake details

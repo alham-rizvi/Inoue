@@ -148,6 +148,14 @@ CVE entries may use an `affected` expression such as `>=2.0,<2.4.52`. The compar
 
 Successful scans exit 0. Any target scan error exits 1. CVE matches exit 2 only when both `--cve` and `--fail-on-cve` are enabled; argument and configuration errors retain exit code 2 from Typer's existing behavior.
 
+### 21. Server-family signatures use protocol evidence
+
+Additional web-server, application-server, reverse-proxy, and forwarding-proxy
+entries live in `fingerprints/web_server_catalog.py`. These entries prefer
+`Server`, `Via`, and `X-Powered-By` headers over generic page text so catalog
+growth remains reviewable and version extraction remains deterministic. The
+catalog is merged before the runtime indexes are compiled.
+
 ## How a scan executes
 
 The flow is roughly:

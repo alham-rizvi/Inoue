@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Added a curated web-server dataset covering additional application servers,
+  reverse proxies, and forwarding proxies with header-based version detection.
+- Added regression coverage for Kestrel, Node.js HTTP, and server-family catalog
+  sizing; the live catalog now contains 63 server-family entries.
+
 ## 1.1.2 - 2026-09-10
 
 ### Added

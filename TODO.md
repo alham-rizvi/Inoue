@@ -233,3 +233,4 @@ Never mark a checkbox complete without a corresponding commit hash. Add the shor
 ## Roadmap v2 log
 
 - 2026-09-10: Added the verification-first reconciliation plan after detecting conflicting completed and pending status entries.
+- 2026-09-10: Added a curated web-server dataset with 63 server-family entries; full suite passed with 48 tests and the duplicate-signature checker passed.

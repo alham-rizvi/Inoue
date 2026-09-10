@@ -8,6 +8,7 @@ from re import Pattern
 from typing import Any
 
 from fingerprints.extended_catalog import EXTENDED_SIGNATURES
+from fingerprints.web_server_catalog import WEB_SERVER_SIGNATURES
 
 SIGNATURES = {'Apache': {'headers': {'Server': 'Apache(?:/(\\d+[\\d.]+))?'}, 'category': 'Web Server'},
  'Nginx': {'headers': {'Server': 'nginx(?:/(\\d+[\\d.]+))?'}, 'category': 'Web Server'},
@@ -840,6 +841,10 @@ for name, signature in EXTENDED_SIGNATURES.items():
                     current[key] = value
         continue
     SIGNATURES[name] = signature
+
+for name, signature in WEB_SERVER_SIGNATURES.items():
+    if name not in SIGNATURES:
+        SIGNATURES[name] = signature
 
 
 def _compile_pattern(value: Any) -> Any:
