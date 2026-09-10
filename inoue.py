@@ -312,6 +312,7 @@ def result_to_dict(result: ScanResult) -> dict:
         ],
         "dns": result.dns_records,
         "ssl": result.ssl_info,
+        "tls_fingerprint": result.tls_fingerprint,
         "recon": result.enriched.get("recon", []) if result.enriched else [],
         "service_hints": result.enriched.get("service_hints", []) if result.enriched else [],
         "plugins": result.enriched.get("plugins", {}) if result.enriched else {},
@@ -437,6 +438,7 @@ def main(
     evidence: bool = typer.Option(False, "-e", "--evidence", help="Show detection evidence"),
     no_dns: bool = typer.Option(False, "--no-dns", help="Skip DNS enumeration"),
     no_ssl: bool = typer.Option(False, "--no-ssl", help="Skip SSL inspection"),
+    tls_fingerprint: bool = typer.Option(False, "--tls-fingerprint", help="Capture best-effort TLS metadata and fingerprint when available"),
     timeout: int = typer.Option(10, "-t", "--timeout", help="Request timeout in seconds"),
     json_out: bool = typer.Option(False, "--json", help="Output as JSON"),
     output: Optional[str] = typer.Option(None, "-o", "--output", help="Save JSON to file"),
@@ -531,6 +533,13 @@ def main(
     if not no_banner and not json_out:
         print_banner()
 
+    if tls_fingerprint:
+        try:
+            from core.tls_fingerprint import extract_tls_metadata
+        except Exception:
+            console.print("[yellow]TLS fingerprinting unavailable[/yellow]: optional TLS tooling is not installed; skipping best-effort metadata capture.")
+            tls_fingerprint = False
+
     if any([service, headers, dns, ssl, whois, subdomains, mail, ports, extra, fast, full_recon, all_modules, smart, active, passive, company, cve]) and modules is None:
         modules = []
     if modules is not None:
@@ -577,6 +586,21 @@ def main(
         modules = None
 
     results = []
+
+    def maybe_capture_tls(result: ScanResult):
+        if not tls_fingerprint or not result.final_url:
+            return
+        try:
+            from urllib.parse import urlparse
+            from core.tls_fingerprint import extract_tls_metadata
+            parsed = urlparse(result.final_url)
+            hostname = parsed.hostname or result.url
+            metadata = extract_tls_metadata(hostname, port=443 if parsed.scheme == "https" else 80)
+            if metadata.get("available"):
+                result.ssl_info.update(metadata)
+                result.tls_fingerprint = metadata.get("fingerprint", "")
+        except Exception:
+            pass
 
     def make_progress_callback(target: str, task_id: int):
         def callback(message: str):
@@ -634,7 +658,9 @@ def main(
                     target = futures[future]
                     progress.remove_task(tasks_map[target])
                     try:
-                        results.append(future.result())
+                        result = future.result()
+                        maybe_capture_tls(result)
+                        results.append(result)
                     except Exception as e:
                         console.print(f"  [red]error[/red] {target}: {e}")
 
@@ -662,6 +688,7 @@ def main(
         return
 
     for result in results:
+        maybe_capture_tls(result)
         if len(results) > 1:
             console.print(f"[dim]  ── {result.url} {'─' * max(0, 50 - len(result.url))}[/dim]")
         if result.error:

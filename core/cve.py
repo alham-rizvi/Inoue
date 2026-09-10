@@ -48,11 +48,14 @@ def correlate_cves(
         severity = str(entry.get("severity", "unknown")).lower()
         if min_severity and SEVERITY_RANK.get(severity, 0) < SEVERITY_RANK.get(min_severity.lower(), 0):
             continue
-        matches.append({
+        payload = {
             "id": entry.get("id", ""),
             "summary": entry.get("summary", ""),
             "severity": severity,
-        })
+        }
+        if "epss_score" in entry:
+            payload["epss_score"] = entry.get("epss_score")
+        matches.append(payload)
     return sorted(
         (item for item in matches if item["id"]),
         key=lambda item: SEVERITY_RANK.get(item["severity"], 0),
@@ -142,13 +145,19 @@ def refresh_cve_dataset(source_url: Optional[str] = None, output_path: Optional[
         summary = next((item.get("value", "") for item in descriptions if item.get("lang") == "en"), "")
         technologies, versions = _technology_versions(cve)
         if technologies and versions:
-            entries.append({
+            record = {
                 "id": cve_id,
                 "technologies": technologies,
                 "versions": versions,
                 "summary": summary,
                 "severity": _severity(cve),
-            })
+            }
+            epss_value = cve.get("metrics", {}).get("epss")
+            if epss_value:
+                score = epss_value[0].get("cvssData", {}).get("baseScore")
+                if score is not None:
+                    record["epss_score"] = float(score)
+            entries.append(record)
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(entries, indent=2) + "\n", encoding="utf-8")
     return len(entries)

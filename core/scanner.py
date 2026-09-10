@@ -62,6 +62,7 @@ class ScanResult:
     headers: dict = field(default_factory=dict)
     dns_records: dict = field(default_factory=dict)
     ssl_info: dict = field(default_factory=dict)
+    tls_fingerprint: str = ""
     whois_info: dict = field(default_factory=dict)
     whois_summary: dict = field(default_factory=dict)
     subdomains: list = field(default_factory=list)
@@ -655,6 +656,8 @@ def _serialize_scan_result(result: ScanResult) -> dict:
         "server": result.server,
         "technologies": [d.__dict__ for d in result.technologies],
         "headers": result.headers,
+        "ssl_info": result.ssl_info,
+        "tls_fingerprint": result.tls_fingerprint,
         "enriched": result.enriched,
         "error": result.error,
         "notes": result.notes,
@@ -670,6 +673,8 @@ def _deserialize_scan_result(payload: dict) -> ScanResult:
         ip=payload.get("ip", ""),
         server=payload.get("server", ""),
         headers=payload.get("headers", {}),
+        ssl_info=payload.get("ssl_info", {}),
+        tls_fingerprint=payload.get("tls_fingerprint", ""),
         enriched=payload.get("enriched", {}),
         error=payload.get("error"),
         notes=payload.get("notes", []),
@@ -686,6 +691,57 @@ def _correlate_detection_cves(
     dataset = load_cve_dataset(dataset_path)
     for detection in detections:
         detection.cves = correlate_cves(detection.name, detection.version, dataset, min_severity)
+
+
+def diff_scan_results(previous: ScanResult, current: ScanResult) -> dict:
+    """Compare two scan results and summarize changes in technologies, CVEs, and ports."""
+    previous_tech = {tech.name: tech for tech in previous.technologies}
+    current_tech = {tech.name: tech for tech in current.technologies}
+
+    technology_changes = []
+    for name in sorted(set(previous_tech) | set(current_tech)):
+        prev = previous_tech.get(name)
+        curr = current_tech.get(name)
+        if prev is None and curr is not None:
+            technology_changes.append({"status": "added", "name": name, "version": curr.version})
+        elif prev is not None and curr is None:
+            technology_changes.append({"status": "removed", "name": name, "version": prev.version})
+        elif prev is not None and curr is not None and prev.version != curr.version:
+            technology_changes.append({"status": "changed", "name": name, "previous": prev.version, "current": curr.version})
+
+    previous_cves = {item["id"] for tech in previous.technologies for item in tech.cves}
+    current_cves = {item["id"] for tech in current.technologies for item in tech.cves}
+    cve_changes = []
+    for cve_id in sorted(current_cves - previous_cves):
+        cve_changes.append({"status": "added", "id": cve_id})
+    for cve_id in sorted(previous_cves - current_cves):
+        cve_changes.append({"status": "removed", "id": cve_id})
+
+    previous_ports = set(previous.open_ports)
+    current_ports = set(current.open_ports)
+    port_changes = {
+        "added": sorted(current_ports - previous_ports),
+        "removed": sorted(previous_ports - current_ports),
+    }
+
+    certificate_expiry = []
+    expiry = current.ssl_info.get("notAfter") if isinstance(current.ssl_info, dict) else ""
+    if expiry:
+        try:
+            from datetime import datetime
+            expires = datetime.strptime(expiry, "%b %d %H:%M:%S %Y %Z")
+            delta_days = (expires - datetime.utcnow()).days
+            if delta_days <= 30:
+                certificate_expiry.append({"expires": expiry, "days_remaining": delta_days})
+        except Exception:
+            pass
+
+    return {
+        "technology_changes": technology_changes,
+        "cve_changes": cve_changes,
+        "port_changes": port_changes,
+        "certificate_expiry": certificate_expiry,
+    }
 
 
 async def _async_scan_target(
