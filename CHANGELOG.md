@@ -9,6 +9,8 @@
 - Added optional MCP catalog and read-only scan tools through `inoue-mcp`.
 - Added editable Rich terminal text styles, category colors, and compact,
   standard, or wide table layouts through TOML configuration.
+- Added the repository wiki guide for verification, Docker, MCP, terminal
+  themes, and trusted PyPI publishing setup.
 
 ## 1.1.2 - 2026-09-10
 
