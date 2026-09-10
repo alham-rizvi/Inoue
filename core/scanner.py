@@ -83,7 +83,20 @@ def _normalize_version(raw: str) -> Optional[str]:
         value = value.split(None, 1)[-1]
     value = value.replace("_", ".").replace("-", ".")
     value = re.sub(r"[^0-9.]+", "", value)
-    return value if value.count(".") or value.isdigit() else None
+    if not value:
+        return None
+
+    digits_only = re.sub(r"\D", "", value)
+    if digits_only:
+        if len(digits_only) > 10:
+            return None
+
+    if "." in value:
+        return value
+
+    if value.isdigit():
+        return value if len(value) <= 5 else None
+    return None
 
 
 def _extract_version(pattern: str, text: str) -> Optional[str]:

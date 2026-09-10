@@ -12,6 +12,7 @@ from typer.testing import CliRunner
 from core.scanner import (
     Detection,
     ScanResult,
+    _normalize_version,
     async_scan_many,
     build_recon_plan,
     build_service_summary,
@@ -59,6 +60,38 @@ class ScannerSummaryTests(unittest.TestCase):
         self.assertIn("PHP", names)
         self.assertIn("WordPress", names)
         self.assertEqual(next(d.version for d in detections if d.name == "Nginx"), "1.26.1")
+
+    def test_normalize_version_rejects_timestamp_like_strings(self):
+        for value in [
+            "1789011933767.02",
+            "6.17890119937",
+            "1789012125429.63156",
+            "5.1789012131349.13281",
+            "bom1::iad1::abc-1789011933767-3f7a9d",
+        ]:
+            self.assertIsNone(_normalize_version(value))
+
+    def test_markdown_and_html_output_files_are_renders_not_json(self):
+        result = ScanResult(
+            url="https://example.com",
+            final_url="https://example.com",
+            status_code=200,
+            response_time_ms=42,
+            technologies=[
+                Detection("Nginx", "Web Server", version="1.26.0", confidence="high", evidence="Server: nginx"),
+                Detection("WordPress", "CMS", version="6.4.0", confidence="medium", evidence="meta generator"),
+            ],
+        )
+
+        markdown = render_html_report([result])
+        self.assertIn("<html", markdown.lower())
+        self.assertIn("Inoue reconnaissance report", markdown)
+        self.assertNotIn("\"technologies\"", markdown)
+
+        markdown_report = __import__("inoue").render_markdown_report([result])
+        self.assertIn("# Inoue reconnaissance report", markdown_report)
+        self.assertIn("| Target | Technology |", markdown_report)
+        self.assertNotIn("\"technologies\"", markdown_report)
 
     def test_run_fingerprints_detects_deeper_service_signatures(self):
         headers = {"Server": "Apache/2.4.49"}

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import time
+from collections import defaultdict
 from typing import Any, Optional
 
 try:  # pragma: no cover - optional dependency
@@ -48,26 +50,36 @@ def create_app() -> Optional[FastAPI]:
     app = FastAPI(title="Inoue API", version="1.0.0")
     max_batch_size = int(os.getenv("INOUE_API_MAX_BATCH_SIZE", "25"))
     api_key = os.getenv("INOUE_API_KEY")
+    rate_limit_per_second = float(os.getenv("INOUE_API_RATE_LIMIT", "0"))
+    client_requests: dict[str, list[float]] = defaultdict(list)
 
     @app.middleware("http")
     async def enforce_api_key(request: Request, call_next):
         if not api_key:
-            return await call_next(request)
-        provided = request.headers.get("x-api-key")
-        if provided != api_key:
-            return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+            pass
+        else:
+            provided = request.headers.get("x-api-key")
+            if provided != api_key:
+                return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+
+        if rate_limit_per_second > 0:
+            client_id = request.headers.get("x-forwarded-for") or request.headers.get("x-real-ip") or (request.client.host if request.client else "unknown")
+            now = time.monotonic()
+            window = [ts for ts in client_requests.get(client_id, []) if now - ts < 1.0]
+            window.append(now)
+            client_requests[client_id] = window
+            if len(window) > rate_limit_per_second:
+                return JSONResponse({"detail": "Rate limit exceeded"}, status_code=429)
+
         return await call_next(request)
 
-    @app.get("/health")
     async def health():
         return {"status": "ok"}
 
-    @app.get("/signatures")
     async def signatures():
         from fingerprints.signatures import SIGNATURES
         return {"count": len(SIGNATURES), "signatures": sorted(SIGNATURES.keys())[:25]}
 
-    @app.post("/scan")
     async def scan_target(payload: ScanRequest):
         result = scan(
             payload.target,
@@ -84,7 +96,6 @@ def create_app() -> Optional[FastAPI]:
             "error": result.error,
         }
 
-    @app.post("/scan/batch")
     async def scan_batch(payload: BatchRequest):
         if len(payload.targets) > max_batch_size:
             raise HTTPException(status_code=400, detail=f"Batch size exceeds {max_batch_size}")
@@ -109,6 +120,16 @@ def create_app() -> Optional[FastAPI]:
                 for item in results
             ]
         }
+
+    app.get("/health")(health)
+    app.get("/signatures")(signatures)
+    app.post("/scan")(scan_target)
+    app.post("/scan/batch")(scan_batch)
+    for prefix in ("/api", "/api/v1"):
+        app.get(f"{prefix}/health")(health)
+        app.get(f"{prefix}/signatures")(signatures)
+        app.post(f"{prefix}/scan")(scan_target)
+        app.post(f"{prefix}/scan/batch")(scan_batch)
 
     return app
 

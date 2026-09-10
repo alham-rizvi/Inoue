@@ -330,6 +330,13 @@ def render_html_report(results: list[ScanResult]) -> str:
     for result in results:
         data = result_to_dict(result)
         technologies = data["technologies"]
+        if not technologies:
+            rows.append(
+                "<tr><td>{}</td><td colspan=\"4\">No technologies detected</td></tr>".format(
+                    html.escape(data["final_url"]),
+                )
+            )
+            continue
         for technology in technologies:
             rows.append(
                 "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
@@ -356,6 +363,29 @@ def render_html_report(results: list[ScanResult]) -> str:
 <table><thead><tr><th>Target</th><th>Technology</th><th>Category</th><th>Version</th><th>Confidence</th></tr></thead>
 <tbody>{rows}</tbody></table><h2>Known CVEs</h2>{cve_section}</body></html>
 """.format(rows="".join(rows), cve_section=cve_section)
+
+
+def render_markdown_report(results: list[ScanResult]) -> str:
+    lines = [
+        "# Inoue reconnaissance report",
+        "",
+        "| Target | Technology | Category | Version | Confidence | Evidence |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
+
+    for result in results:
+        if not result.technologies:
+            lines.append(f"| {result.final_url} | — | — | — | — | no technologies detected |")
+            continue
+        for technology in result.technologies:
+            evidence = (technology.evidence or "—").replace("\n", " ")[:120]
+            lines.append(
+                f"| {result.final_url} | {technology.name} | {technology.category} | {technology.version or 'unknown'} | {technology.confidence} | {evidence} |"
+            )
+
+    if not results:
+        lines.append("No results.")
+    return "\n".join(lines)
 
 
 def result_exit_code(results: list[ScanResult], cve_enabled: bool, fail_on_cve: bool) -> int:
@@ -675,16 +705,15 @@ def main(
         console.print(f"  [green]saved[/green] {nuclei_out}")
 
     if json_out or output:
-        if output and Path(output).suffix.lower() == ".html":
-            Path(output).write_text(render_html_report(results), encoding="utf-8")
-            console.print(f"  [green]saved[/green] {output}")
-            exit_code = result_exit_code(results, bool(cve), fail_on_cve)
-            if exit_code:
-                raise typer.Exit(exit_code)
-            return
         json_str = json.dumps([result_to_dict(result) for result in results], indent=2)
         if output:
-            Path(output).write_text(json_str, encoding="utf-8")
+            suffix = Path(output).suffix.lower()
+            if suffix == ".html":
+                Path(output).write_text(render_html_report(results), encoding="utf-8")
+            elif suffix == ".md":
+                Path(output).write_text(render_markdown_report(results), encoding="utf-8")
+            else:
+                Path(output).write_text(json_str, encoding="utf-8")
             console.print(f"  [green]saved[/green] {output}")
         if json_out:
             print(json_str)
