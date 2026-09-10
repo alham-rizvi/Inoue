@@ -3,6 +3,8 @@
 # commercial use, or public disclosure is prohibited without written permission.
 """Discovery and execution for optional recon result plugins."""
 
+from __future__ import annotations
+
 import importlib.util
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Optional
