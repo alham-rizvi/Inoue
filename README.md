@@ -1,4 +1,5 @@
 # Inoue
+<img width="797" height="733" alt="image" src="https://github.com/user-attachments/assets/e2101e22-1391-4056-a98a-d65f1a6f8a5f" />
 
 ## Version 1.1.2
 
@@ -77,8 +78,6 @@ Repository: https://github.com/alhamrizvi-cloud/Inoue
 - Live scan progress and discovery logging for each target
 - Extensible signature engine for quickly adding new detections
   
-<img width="797" height="733" alt="image" src="https://github.com/user-attachments/assets/e2101e22-1391-4056-a98a-d65f1a6f8a5f" />
-
 
 ## Install
 
