@@ -5,3 +5,4 @@ dnspython>=2.6
 python-whois>=0.8
 requests>=2.31
 beautifulsoup4>=4.12
+tomli>=2.0; python_version < "3.11"

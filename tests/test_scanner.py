@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -14,14 +15,16 @@ from core.scanner import (
     async_scan_many,
     build_recon_plan,
     build_service_summary,
+    detect_contradictions,
     merge_subdomain_candidates,
     summarize_whois_details,
     run_fingerprints,
 )
 from core.cve import correlate_cves, refresh_cve_dataset
+from core.config import load_config
 from core.plugins import run_plugins
 from fingerprints.signatures import SIGNATURES
-from inoue import app, format_update_report, load_targets, write_nuclei_export
+from inoue import app, format_update_report, load_targets, render_html_report, result_exit_code, write_nuclei_export
 
 
 class ScannerSummaryTests(unittest.TestCase):
@@ -125,6 +128,56 @@ class ScannerSummaryTests(unittest.TestCase):
 
         self.assertEqual(versions.get("WordPress"), "6.5.1")
         self.assertEqual(versions.get("Elementor"), "3.23.0")
+
+    def test_confidence_score_rewards_independent_html_agreement(self):
+        html_name = "__confidence_html_fixture__"
+        script_name = "__confidence_script_fixture__"
+        html_signature = {
+            "category": "Test",
+            "html": [re.compile(r"html-signal-one"), re.compile(r"html-signal-two"), re.compile(r"html-signal-three")],
+        }
+        script_signature = {"category": "Test", "scripts": [re.compile(r"script-signal")]}
+        with patch.dict(
+            "core.scanner.COMPILED_SIGNATURES",
+            {html_name: html_signature, script_name: script_signature},
+            clear=False,
+        ), patch("core.scanner._collect_candidate_signatures", return_value={html_name, script_name}):
+            detections = run_fingerprints(
+                {},
+                {},
+                '<script src="/script-signal.js"></script> html-signal-one html-signal-two html-signal-three',
+            )
+
+        scores = {d.name: d.confidence_score for d in detections}
+        self.assertGreater(scores[html_name], scores[script_name])
+        self.assertGreater(scores[html_name], 0)
+
+    def test_negative_signature_excludes_generic_detection(self):
+        generic_name = "__generic_fixture__"
+        specific_name = "__specific_fixture__"
+        with patch.dict(
+            "core.scanner.COMPILED_SIGNATURES",
+            {
+                generic_name: {"category": "Test", "html": [re.compile(r"shared-signal")], "excludes": [specific_name]},
+                specific_name: {"category": "Test", "html": [re.compile(r"shared-signal")]},
+            },
+            clear=False,
+        ), patch("core.scanner._collect_candidate_signatures", return_value={generic_name, specific_name}):
+            detections = run_fingerprints({}, {}, "shared-signal")
+
+        self.assertEqual({d.name for d in detections}, {specific_name})
+
+    def test_contradictions_flag_conflicting_server_signals(self):
+        detections = [
+            Detection("Nginx", "Web Server", evidence="Server: nginx"),
+            Detection("Apache", "Web Server", evidence="HTML: Apache"),
+        ]
+
+        notes = detect_contradictions(detections)
+
+        self.assertEqual(len(notes), 1)
+        self.assertIn("nginx", notes[0].lower())
+        self.assertIn("apache", notes[0].lower())
 
     def test_run_fingerprints_detects_ecommerce_and_marketing_signatures(self):
         headers = {}
@@ -346,6 +399,20 @@ class ScannerSummaryTests(unittest.TestCase):
         self.assertEqual(matches[0]["id"], "CVE-2021-41773")
         self.assertEqual(matches[0]["severity"], "critical")
 
+    def test_cve_range_matching_and_severity_filtering(self):
+        dataset = [
+            {"id": "CVE-RANGE", "technology": "Apache", "affected": ">=2.4.0,<2.4.52", "severity": "high"},
+            {"id": "CVE-LOW", "technology": "Apache", "versions": ["2.4.49"], "severity": "low"},
+        ]
+
+        in_range = correlate_cves("Apache", "2.4.49", dataset, min_severity="medium")
+        boundary = correlate_cves("Apache", "2.4.52", dataset)
+        exact = correlate_cves("Apache", "2.4.49", dataset)
+
+        self.assertEqual([item["id"] for item in in_range], ["CVE-RANGE"])
+        self.assertEqual(boundary, [])  # Changed to assert that boundary is empty
+        self.assertEqual([item["id"] for item in exact], ["CVE-RANGE", "CVE-LOW"])
+
     def test_nuclei_export_groups_targets_by_technology_tag(self):
         with TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "nuclei.json"
@@ -363,6 +430,58 @@ class ScannerSummaryTests(unittest.TestCase):
 
         self.assertIn('"apache": [', payload)
         self.assertIn("https://example.com", payload)
+
+    def test_html_report_contains_technology_and_cve_sections(self):
+        result = ScanResult(
+            "https://example.com",
+            "https://example.com",
+            200,
+            1,
+            technologies=[
+                Detection(
+                    "Apache",
+                    "Web Server",
+                    version="2.4.49",
+                    confidence_score=80,
+                    cves=[{"id": "CVE-TEST", "severity": "high", "summary": "Example"}],
+                ),
+            ],
+        )
+
+        report = render_html_report([result])
+
+        self.assertIn("Inoue reconnaissance report", report)
+        self.assertIn("Apache", report)
+        self.assertIn("CVE-TEST", report)
+
+    def test_config_uses_project_values_over_user_values(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            user_path = root / "user.toml"
+            project_path = root / "project.toml"
+            user_path.write_text("rate_limit = 2\ncache = true\n", encoding="utf-8")
+            project_path.write_text("rate_limit = 1\n", encoding="utf-8")
+
+            config = load_config(str(project_path), str(user_path))
+
+        self.assertEqual(config["rate_limit"], 1)
+        self.assertTrue(config["cache"])
+
+    def test_semantic_exit_codes_distinguish_errors_and_cves(self):
+        clean = ScanResult("https://clean.example", "https://clean.example", 200, 1)
+        error = ScanResult("https://error.example", "https://error.example", 0, 1, error="timeout")
+        cve_result = ScanResult(
+            "https://vulnerable.example",
+            "https://vulnerable.example",
+            200,
+            1,
+            technologies=[Detection("Apache", "Web Server", cves=[{"id": "CVE-TEST"}])],
+        )
+
+        self.assertEqual(result_exit_code([clean], False, False), 0)
+        self.assertEqual(result_exit_code([error], False, False), 1)
+        self.assertEqual(result_exit_code([cve_result], True, True), 2)
+        self.assertEqual(result_exit_code([cve_result], True, False), 0)
 
     def test_plugins_run_and_failures_are_isolated(self):
         with TemporaryDirectory() as temp_dir:

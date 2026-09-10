@@ -58,6 +58,24 @@ This is the most common contribution. Follow this process:
 4. **Test locally**: `python inoue.py https://example.com -e`
 5. **Run test suite**: `python -m unittest discover -s tests -p 'test*.py' -q`
 
+#### Fixture-based signature tests
+
+Every new high-traffic signature should include a fixture directory under
+`tests/fixtures/<Technology Name>/` with:
+
+- `response.html` containing the smallest representative response signal
+- `headers.json` containing representative response headers, or `{}`
+
+The parametrized harness in `tests/test_signature_fixtures.py` discovers these
+directories automatically and asserts that the directory name is detected.
+Use indexed signals such as a distinctive script source, header, or HTML token;
+the tokenizer and signature indexes intentionally filter weak candidates.
+Run the focused harness with:
+
+```bash
+python -m pytest tests/test_signature_fixtures.py -q
+```
+
 ### 2. Improving version detection
 
 Enhance how versions are extracted from services:

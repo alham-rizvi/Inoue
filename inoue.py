@@ -11,6 +11,7 @@ Repository: https://github.com/alhamrizvi-cloud/Inoue
 import json
 import asyncio
 import concurrent.futures
+import html
 import re
 import subprocess
 import sys
@@ -25,6 +26,7 @@ from rich import box
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from core.cve import refresh_cve_dataset
+from core.config import load_config
 from core.scanner import build_service_summary, scan, scan_many, ScanResult
 
 app = typer.Typer(help="Inoue — tech stack fingerprinting CLI", add_completion=False)
@@ -288,6 +290,79 @@ def write_nuclei_export(results: list[ScanResult], output_path: str) -> None:
     Path(output_path).write_text(json.dumps(grouped, indent=2) + "\n", encoding="utf-8")
 
 
+def result_to_dict(result: ScanResult) -> dict:
+    return {
+        "url": result.url,
+        "final_url": result.final_url,
+        "ip": result.ip,
+        "status_code": result.status_code,
+        "response_time_ms": result.response_time_ms,
+        "server": result.server,
+        "technologies": [
+            {
+                "name": technology.name,
+                "category": technology.category,
+                "version": technology.version,
+                "confidence": technology.confidence,
+                "confidence_score": technology.confidence_score,
+                "evidence": technology.evidence,
+                "cves": technology.cves,
+            }
+            for technology in result.technologies
+        ],
+        "dns": result.dns_records,
+        "ssl": result.ssl_info,
+        "tls_fingerprint": result.tls_fingerprint,
+        "recon": result.enriched.get("recon", []) if result.enriched else [],
+        "service_hints": result.enriched.get("service_hints", []) if result.enriched else [],
+        "plugins": result.enriched.get("plugins", {}) if result.enriched else {},
+        "notes": result.notes,
+        "error": result.error,
+    }
+
+
+def render_html_report(results: list[ScanResult]) -> str:
+    rows = []
+    cves = []
+    for result in results:
+        data = result_to_dict(result)
+        technologies = data["technologies"]
+        for technology in technologies:
+            rows.append(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
+                    html.escape(data["final_url"]),
+                    html.escape(technology["name"]),
+                    html.escape(technology["category"]),
+                    html.escape(str(technology["version"] or "unknown")),
+                    html.escape(str(technology["confidence_score"])),
+                )
+            )
+            for cve in technology["cves"]:
+                cves.append(
+                    "<li><strong>{}</strong> {} ({})</li>".format(
+                        html.escape(cve["id"]),
+                        html.escape(technology["name"]),
+                        html.escape(cve["severity"]),
+                    )
+                )
+    cve_section = "<ul>{}</ul>".format("".join(cves)) if cves else "<p>No known CVE matches.</p>"
+    return """<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Inoue report</title>
+<style>body{{font:15px sans-serif;margin:2rem;color:#202124}}table{{border-collapse:collapse;width:100%}}th,td{{border:1px solid #ccc;padding:.5rem;text-align:left}}th{{background:#f2f2f2}}h1{{margin-bottom:.25rem}}</style>
+</head><body><h1>Inoue reconnaissance report</h1>
+<table><thead><tr><th>Target</th><th>Technology</th><th>Category</th><th>Version</th><th>Confidence</th></tr></thead>
+<tbody>{rows}</tbody></table><h2>Known CVEs</h2>{cve_section}</body></html>
+""".format(rows="".join(rows), cve_section=cve_section)
+
+
+def result_exit_code(results: list[ScanResult], cve_enabled: bool, fail_on_cve: bool) -> int:
+    if any(result.error for result in results):
+        return 1
+    if cve_enabled and fail_on_cve and any(technology.cves for result in results for technology in result.technologies):
+        return 2
+    return 0
+
+
 def run_self_update() -> dict:
     repo_root = Path(__file__).resolve().parent
     try:
@@ -363,13 +438,14 @@ def main(
     evidence: bool = typer.Option(False, "-e", "--evidence", help="Show detection evidence"),
     no_dns: bool = typer.Option(False, "--no-dns", help="Skip DNS enumeration"),
     no_ssl: bool = typer.Option(False, "--no-ssl", help="Skip SSL inspection"),
+    tls_fingerprint: bool = typer.Option(False, "--tls-fingerprint", help="Capture best-effort TLS metadata and fingerprint when available"),
     timeout: int = typer.Option(10, "-t", "--timeout", help="Request timeout in seconds"),
     json_out: bool = typer.Option(False, "--json", help="Output as JSON"),
     output: Optional[str] = typer.Option(None, "-o", "--output", help="Save JSON to file"),
     nuclei_out: Optional[str] = typer.Option(None, "--nuclei-out", help="Write technology-tagged target groups as JSON"),
     workers: int = typer.Option(5, "-w", "--workers", help="Concurrent workers"),
     rate_limit: Optional[float] = typer.Option(None, "--rate-limit", help="Maximum requests per second per host"),
-    cache: bool = typer.Option(False, "--cache", help="Cache repeat scan results locally"),
+    cache: Optional[bool] = typer.Option(None, "--cache/--no-cache", help="Cache repeat scan results locally"),
     cache_path: Optional[str] = typer.Option(None, "--cache-path", help="SQLite cache path"),
     cache_ttl: int = typer.Option(86400, "--cache-ttl", help="Cache lifetime in seconds"),
     plugin_dir: Optional[str] = typer.Option(None, "--plugin-dir", help="Additional directory containing result plugins"),
@@ -392,7 +468,9 @@ def main(
     active: bool = typer.Option(False, "--active", help="Enable active reconnaissance checks such as directories and common ports"),
     passive: bool = typer.Option(False, "--passive", help="Enable passive recon sources such as crt.sh and public intel"),
     company: bool = typer.Option(False, "--company", help="Collect site and company metadata alongside recon results"),
-    cve: bool = typer.Option(False, "--cve", help="Correlate detected versions with the local CVE dataset"),
+    cve: Optional[bool] = typer.Option(None, "--cve/--no-cve", help="Correlate detected versions with the local CVE dataset"),
+    cve_min_severity: Optional[str] = typer.Option(None, "--cve-min-severity", help="Minimum CVE severity: low, medium, high, or critical"),
+    fail_on_cve: bool = typer.Option(False, "--fail-on-cve", help="Exit with code 2 when CVEs are found"),
 ):
     """
     Inoue — tech stack fingerprinting CLI
@@ -407,6 +485,22 @@ def main(
     """
     if ctx.invoked_subcommand is not None:
         return
+
+    config = load_config()
+    if rate_limit is None:
+        rate_limit = config.get("rate_limit")
+    if cache is None:
+        cache = bool(config.get("cache", False))
+    if cache_path is None:
+        cache_path = config.get("cache_path")
+    if cache_ttl == 86400 and "cache_ttl" in config:
+        cache_ttl = int(config["cache_ttl"])
+    if cve is None:
+        cve = bool(config.get("cve", False))
+    if cve_min_severity is None:
+        cve_min_severity = config.get("cve_min_severity")
+    if plugin_dir is None:
+        plugin_dir = config.get("plugin_dir")
 
     if targets and targets[0] == "update-cve":
         command_args = targets[1:]
@@ -438,6 +532,13 @@ def main(
 
     if not no_banner and not json_out:
         print_banner()
+
+    if tls_fingerprint:
+        try:
+            from core.tls_fingerprint import extract_tls_metadata
+        except Exception:
+            console.print("[yellow]TLS fingerprinting unavailable[/yellow]: optional TLS tooling is not installed; skipping best-effort metadata capture.")
+            tls_fingerprint = False
 
     if any([service, headers, dns, ssl, whois, subdomains, mail, ports, extra, fast, full_recon, all_modules, smart, active, passive, company, cve]) and modules is None:
         modules = []
@@ -486,6 +587,21 @@ def main(
 
     results = []
 
+    def maybe_capture_tls(result: ScanResult):
+        if not tls_fingerprint or not result.final_url:
+            return
+        try:
+            from urllib.parse import urlparse
+            from core.tls_fingerprint import extract_tls_metadata
+            parsed = urlparse(result.final_url)
+            hostname = parsed.hostname or result.url
+            metadata = extract_tls_metadata(hostname, port=443 if parsed.scheme == "https" else 80)
+            if metadata.get("available"):
+                result.ssl_info.update(metadata)
+                result.tls_fingerprint = metadata.get("fingerprint", "")
+        except Exception:
+            pass
+
     def make_progress_callback(target: str, task_id: int):
         def callback(message: str):
             if json_out:
@@ -515,6 +631,7 @@ def main(
                 cache_path=cache_path or "~/.cache/inoue/cache.db" if cache else None,
                 cache_ttl=cache_ttl,
                 plugin_dirs=[plugin_dir] if plugin_dir else None,
+                cve_min_severity=cve_min_severity,
             )))
             for target in targets:
                 progress.remove_task(tasks_map[target])
@@ -531,6 +648,7 @@ def main(
                         api_key=api_key,
                         modules=modules,
                         plugin_dirs=[plugin_dir] if plugin_dir else None,
+                        cve_min_severity=cve_min_severity,
                         progress=make_progress_callback(t, tasks_map[t]),
                     ): t
                     for t in targets
@@ -540,7 +658,9 @@ def main(
                     target = futures[future]
                     progress.remove_task(tasks_map[target])
                     try:
-                        results.append(future.result())
+                        result = future.result()
+                        maybe_capture_tls(result)
+                        results.append(result)
                     except Exception as e:
                         console.print(f"  [red]error[/red] {target}: {e}")
 
@@ -549,42 +669,36 @@ def main(
         console.print(f"  [green]saved[/green] {nuclei_out}")
 
     if json_out or output:
-        out = []
-        for r in results:
-            out.append({
-                "url": r.url,
-                "final_url": r.final_url,
-                "ip": r.ip,
-                "status_code": r.status_code,
-                "response_time_ms": r.response_time_ms,
-                "server": r.server,
-                "technologies": [
-                    {"name": t.name, "category": t.category, "version": t.version, "evidence": t.evidence, "cves": t.cves}
-                    for t in r.technologies
-                ],
-                "dns": r.dns_records,
-                "ssl": r.ssl_info,
-                "recon": r.enriched.get("recon", []) if r.enriched else [],
-                "service_hints": r.enriched.get("service_hints", []) if r.enriched else [],
-                "plugins": r.enriched.get("plugins", {}) if r.enriched else {},
-                "error": r.error,
-            })
-        json_str = json.dumps(out, indent=2)
+        if output and Path(output).suffix.lower() == ".html":
+            Path(output).write_text(render_html_report(results), encoding="utf-8")
+            console.print(f"  [green]saved[/green] {output}")
+            exit_code = result_exit_code(results, bool(cve), fail_on_cve)
+            if exit_code:
+                raise typer.Exit(exit_code)
+            return
+        json_str = json.dumps([result_to_dict(result) for result in results], indent=2)
         if output:
-            with open(output, "w") as f:
-                f.write(json_str)
+            Path(output).write_text(json_str, encoding="utf-8")
             console.print(f"  [green]saved[/green] {output}")
         if json_out:
             print(json_str)
+        exit_code = result_exit_code(results, bool(cve), fail_on_cve)
+        if exit_code:
+            raise typer.Exit(exit_code)
         return
 
     for result in results:
+        maybe_capture_tls(result)
         if len(results) > 1:
             console.print(f"[dim]  ── {result.url} {'─' * max(0, 50 - len(result.url))}[/dim]")
         if result.error:
             console.print(f"  [red]error[/red] {result.error}\n")
             continue
         render_result(result, verbose=verbose, evidence=evidence, modules=modules)
+
+    exit_code = result_exit_code(results, bool(cve), fail_on_cve)
+    if exit_code:
+        raise typer.Exit(exit_code)
 
 
 if __name__ == "__main__":

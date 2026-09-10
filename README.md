@@ -64,6 +64,8 @@ python inoue.py --rate-limit 1 --cache target.com
 
 # Correlate detected versions with the local CVE dataset
 python inoue.py --cve target.com
+python inoue.py --cve --cve-min-severity high target.com
+python inoue.py --cve --fail-on-cve target.com
 
 # Refresh the local CVE dataset explicitly
 python inoue.py update-cve
@@ -74,6 +76,7 @@ python inoue.py --nuclei-out nuclei-targets.json target.com
 # JSON output
 python inoue.py --json target.com
 python inoue.py --json -o results.json target.com
+python inoue.py -o report.html target.com
 
 # Fast HTB/CTF style scan without DNS
 python inoue.py --no-dns -t 5 10.10.11.55
@@ -86,6 +89,9 @@ python inoue.py update
 ```
 
 For a full command reference, see [COMMANDS.md](COMMANDS.md).
+
+Operational defaults can be stored in project `.inoue.toml` or user
+`~/.config/inoue/config.toml`; CLI flags always take precedence.
 
 ## Options
 
@@ -158,6 +164,13 @@ Contributions are welcome. Please see [CONTRIBUTING.md](CONTRIBUTING.md) for set
 ## Catalog expansion and update guide
 
 A full walkthrough for extending the fingerprint catalog, adding version detection heuristics, and keeping the tool current is available in [GUIDE.md](GUIDE.md).
+
+Normalize a reviewed Wappalyzer catalog without changing scans:
+
+```bash
+python scripts/import_wappalyzer.py wappalyzer.json
+python scripts/import_wappalyzer.py wappalyzer.json --write --output imported.json
+```
 
 ## Adding signatures
 

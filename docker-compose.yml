@@ -1,0 +1,14 @@
+version: "3.9"
+
+services:
+  inoue:
+    build: .
+    command: ["python", "inoue.py", "--help"]
+    volumes:
+      - .:/app
+      - cache:/tmp/inoue-cache
+      - cve:/app/data
+
+volumes:
+  cache:
+  cve:
