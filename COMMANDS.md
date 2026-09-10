@@ -2,6 +2,30 @@
 
 This file documents the main commands and flags supported by Inoue.
 
+## Watch and diff scans
+
+The library exposes `watch_scan_loop` and `diff_scan_results` for applications
+that run repeated foreground scans and compare technology, CVE, port, and
+certificate changes. The loop is intentionally bounded and does not create a
+daemon or service-manager process.
+
+## Webhook delivery
+
+Use the payload builders in `core.webhooks` for generic, Slack, or Discord
+notifications. `send_webhook` posts only to the caller-provided URL with TLS
+verification enabled by default. Keep webhook URLs in environment variables or
+local configuration; never commit credentials.
+
+## API server
+
+Install the optional API dependencies and start the server with:
+
+```bash
+python -m uvicorn api.main:app --host 0.0.0.0 --port 8000
+```
+
+See [API.md](API.md) for endpoint payloads, authentication, and batch limits.
+
 ## Run the scanner
 
 ```bash

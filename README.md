@@ -1,5 +1,33 @@
 # Inoue
 
+## Version 1.1.2
+
+The current release adds a safer release-ready recon workflow while keeping
+scanning read-only:
+
+- repeated watch scans and structured technology, CVE, port, and certificate diffs;
+- generic, Slack, and Discord webhook payloads with verified HTTPS delivery;
+- best-effort TLS metadata and known CDN/WAF fingerprint matching;
+- optional FastAPI endpoints for health, signature, single-target, and batch scans;
+- Wappalyzer catalog normalization with duplicate compatibility checks;
+- offline CVE correlation with optional EPSS scores and explicit refresh only;
+- Python 3.12 CI coverage and PyPI package publishing through GitHub Actions.
+
+The bundled offline CVE dataset is included in published wheels.
+
+## Install
+
+```bash
+python -m pip install inoue==1.1.2
+inoue --help
+```
+
+Install the optional API dependencies with:
+
+```bash
+python -m pip install "inoue[api]==1.1.2"
+```
+
 <img width="430" height="63" alt="image" src="https://github.com/user-attachments/assets/3ebec879-7fdb-4ee4-9def-277e95b1c406" />
 
 Inoue is a fast, open-source recon-oriented tech stack fingerprinting CLI. It is designed to identify the technologies exposed by a target website or service from the terminal, with a broad signature catalog that covers servers, runtimes, CMS platforms, ecommerce stacks, frameworks, JavaScript libraries, analytics tools, payment providers, admin panels, cloud/self-hosted management surfaces, VPN portals, and IoT/admin devices.

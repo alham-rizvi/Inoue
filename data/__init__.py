@@ -1,0 +1,1 @@
+"""Bundled offline data shipped with Inoue."""
