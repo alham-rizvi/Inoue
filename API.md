@@ -32,6 +32,16 @@ curl -X POST http://localhost:8000/scan/batch \
 
 Set `INOUE_API_KEY` and send the `X-API-Key` header when the API is configured to require authentication.
 
+Requests validate `timeout` between 1 and 120 seconds, batch `workers`
+between 1 and 50, and `rate_limit` between greater than 0 and 100 requests
+per second. Invalid values receive a validation response instead of starting
+a scan. Single-target scans run in a worker thread so the async API event loop
+remains responsive.
+
+Both scan endpoints return the complete scan result contract, including IP,
+headers, DNS, SSL, WHOIS, subdomains, mail records, ports, directories,
+extra intelligence, plugins, notes, errors, and cache status.
+
 ## MCP integration
 
 For MCP-compatible clients, install the optional extra and launch the stdio

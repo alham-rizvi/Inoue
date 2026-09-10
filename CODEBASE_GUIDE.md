@@ -168,6 +168,33 @@ into Rich presentation settings without changing scan results or JSON output.
 category counts, and the existing read-only scanner while remaining import-safe
 when the `mcp` package is not installed.
 
+### 23. Async scans preserve recon parity
+
+`scan_many()` and the API batch path execute the same selected DNS, SSL,
+WHOIS, mail, subdomain, port, directory, public-intelligence, company, and
+plugin modules as synchronous scans. Optional module failures are isolated to
+their result field so one unavailable source does not discard the scan.
+
+### 24. Cache keys include scan configuration
+
+Cached results are keyed by target plus the effective timeout, redirect,
+DNS/SSL, module, plugin, CVE, and enrichment configuration. A fast scan must
+never satisfy a later full-recon request. Cache serialization includes every
+`ScanResult` recon field so cache hits preserve the public result contract.
+
+### 25. API work is bounded and non-blocking
+
+FastAPI request models constrain timeouts, worker counts, and rate limits. The
+single-target endpoint delegates the synchronous scanner to a worker thread so
+it does not block health checks or other requests. Single and batch endpoints
+return the same complete serialized scan shape.
+
+### 26. Plugin results must be JSON serializable
+
+Plugins remain isolated enrichment adapters. A plugin result is checked with
+`json.dumps()` before it is attached to a scan; non-serializable values become
+structured plugin errors instead of breaking JSON or API output.
+
 ## How a scan executes
 
 The flow is roughly:
@@ -178,7 +205,8 @@ The flow is roughly:
 4. Response headers, cookies, and body are extracted.
 5. `run_fingerprints()` filters candidates and matches known signatures.
 6. Recon modules may run in parallel for DNS, SSL, WHOIS, subdomains, directories, and public intel.
-7. `ScanResult` is returned and rendered or serialized.
+7. `ScanResult` is returned and rendered or serialized. Async scans use bounded
+	worker threads for synchronous recon helpers and preserve the same fields.
 
 ## Known gotchas and safety notes
 

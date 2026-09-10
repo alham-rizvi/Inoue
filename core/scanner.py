@@ -7,6 +7,7 @@ Core scanning engine - fetches target and runs all detections concurrently.
 
 import os
 import asyncio
+import json
 import re
 import socket
 import ssl
@@ -744,6 +745,14 @@ def _serialize_scan_result(result: ScanResult) -> dict:
         "headers": result.headers,
         "ssl_info": result.ssl_info,
         "tls_fingerprint": result.tls_fingerprint,
+        "dns_records": result.dns_records,
+        "whois_info": result.whois_info,
+        "whois_summary": result.whois_summary,
+        "subdomains": result.subdomains,
+        "mail_records": result.mail_records,
+        "open_ports": result.open_ports,
+        "directories": result.directories,
+        "extra_intel": result.extra_intel,
         "enriched": result.enriched,
         "error": result.error,
         "notes": result.notes,
@@ -762,6 +771,14 @@ def _deserialize_scan_result(payload: dict) -> ScanResult:
         headers=payload.get("headers", {}),
         ssl_info=payload.get("ssl_info", {}),
         tls_fingerprint=payload.get("tls_fingerprint", ""),
+        dns_records=payload.get("dns_records", {}),
+        whois_info=payload.get("whois_info", {}),
+        whois_summary=payload.get("whois_summary", {}),
+        subdomains=payload.get("subdomains", []),
+        mail_records=payload.get("mail_records", []),
+        open_ports=payload.get("open_ports", []),
+        directories=payload.get("directories", []),
+        extra_intel=payload.get("extra_intel", {}),
         enriched=payload.get("enriched", {}),
         error=payload.get("error"),
         notes=payload.get("notes", []),
@@ -769,6 +786,29 @@ def _deserialize_scan_result(payload: dict) -> ScanResult:
     )
     result.technologies = [Detection(**item) for item in payload.get("technologies", [])]
     return result
+
+
+def _scan_cache_module(
+    timeout: int,
+    follow_redirects: bool,
+    dns: bool,
+    ssl_check: bool,
+    modules: Optional[list[str]],
+    plugin_dirs: Optional[list[str]],
+    cve_min_severity: Optional[str],
+    api_key: Optional[str],
+) -> str:
+    options = {
+        "timeout": timeout,
+        "follow_redirects": follow_redirects,
+        "dns": dns,
+        "ssl": ssl_check,
+        "modules": sorted(set(modules or [])),
+        "plugin_dirs": sorted(str(path) for path in (plugin_dirs or [])),
+        "cve_min_severity": cve_min_severity or "",
+        "api_key": bool(api_key),
+    }
+    return "scan:" + json.dumps(options, sort_keys=True, separators=(",", ":"))
 
 
 def _correlate_detection_cves(
@@ -817,8 +857,12 @@ def diff_scan_results(previous: ScanResult, current: ScanResult) -> dict:
     if expiry:
         try:
             from datetime import datetime
-            expires = datetime.strptime(expiry, "%b %d %H:%M:%S %Y %Z")
-            delta_days = (expires - datetime.utcnow()).days
+            normalized_expiry = _parse_cert_datetime(expiry)
+            if not normalized_expiry:
+                raise ValueError("unsupported certificate expiry format")
+            expires = datetime.fromisoformat(normalized_expiry.replace("Z", "+00:00"))
+            from datetime import timezone
+            delta_days = (expires - datetime.now(timezone.utc)).days
             if delta_days <= 30:
                 certificate_expiry.append({"expires": expiry, "days_remaining": delta_days})
         except Exception:
@@ -868,6 +912,9 @@ async def _async_scan_target(
     modules: Optional[list[str]] = None,
     plugin_dirs: Optional[list[str]] = None,
     cve_min_severity: Optional[str] = None,
+    dns_enabled: bool = True,
+    ssl_enabled: bool = True,
+    api_key: Optional[str] = None,
     progress: Optional[Callable[[str], None]] = None,
 ) -> ScanResult:
     if not url.startswith(("http://", "https://")):
@@ -926,6 +973,7 @@ async def _async_scan_target(
     if "cve" in (modules or []) or "cves" in (modules or []):
         _correlate_detection_cves(result.technologies, min_severity=cve_min_severity)
     result.ip = _resolve_ip(parsed.hostname or "")
+    plan = build_recon_plan(modules)
     result.enriched = {
         "services": build_service_summary(result),
         "recon": build_recon_summary(result),
@@ -933,6 +981,55 @@ async def _async_scan_target(
             item for item in build_recon_summary(result) if item.get("service_hints")
         ],
     }
+
+    hostname = parsed.hostname or ""
+    recon_results = {}
+    tasks = []
+    if plan.get("dns") and dns_enabled and hostname:
+        tasks.append(("dns", lambda: _get_dns(hostname)))
+    if plan.get("ssl") and ssl_enabled and hostname and parsed.scheme == "https":
+        tasks.append(("ssl", lambda: _get_ssl_info(hostname)))
+    if plan.get("whois") and hostname:
+        tasks.append(("whois", lambda: _get_whois(hostname)))
+    if plan.get("mail") and hostname:
+        tasks.append(("mail", lambda: _get_mail_records(hostname)))
+    if plan.get("subdomains") and hostname:
+        tasks.append(("subdomains", lambda: discover_subdomains(hostname)))
+    if plan.get("ports") and hostname:
+        tasks.append(("ports", lambda: _scan_common_ports(hostname, timeout=max(1, min(3, timeout // 4)))))
+    if plan.get("extra") and hostname:
+        tasks.append(("extra", lambda: {
+            "directories": _enumerate_directories(result.final_url, result.headers, response.text, timeout=max(1, min(2, timeout // 4))),
+            "intel": _fetch_public_intel(hostname, response.text),
+        }))
+    if tasks:
+        task_results = await asyncio.gather(
+            *(asyncio.to_thread(task) for _, task in tasks),
+            return_exceptions=True,
+        )
+        for (label, _), value in zip(tasks, task_results):
+            recon_results[label] = None if isinstance(value, Exception) else value
+
+    result.dns_records = recon_results.get("dns") or {}
+    result.ssl_info = recon_results.get("ssl") or {}
+    result.whois_info = recon_results.get("whois") or {}
+    result.whois_summary = summarize_whois_details(result.whois_info)
+    result.mail_records = recon_results.get("mail") or []
+    result.subdomains = recon_results.get("subdomains") or []
+    result.open_ports = recon_results.get("ports") or []
+    extra_payload = recon_results.get("extra") or {}
+    result.directories = extra_payload.get("directories") or []
+    result.extra_intel = extra_payload.get("intel") or {}
+    result.extra_intel.setdefault("directories", result.directories)
+    company_intel = _collect_company_intel(hostname, response.text, result.headers)
+    if company_intel:
+        result.extra_intel.setdefault("company", {})
+        result.extra_intel["company"].update(company_intel)
+        result.enriched.setdefault("company", company_intel)
+    if hostname:
+        external = _enrich_with_external_services(hostname, [tech.name for tech in result.technologies], api_key)
+        if external:
+            result.enriched.update(external)
     from core.plugins import run_plugins
     plugin_results = run_plugins(result, plugin_dirs, progress)
     if plugin_results:
@@ -984,7 +1081,11 @@ async def scan_many(
             if progress:
                 progress(f"starting {target}")
             if cache:
-                cached = cache.get(target, "scan")
+                cache_module = _scan_cache_module(
+                    timeout, follow_redirects, dns, ssl_check, modules,
+                    plugin_dirs, cve_min_severity, api_key,
+                )
+                cached = cache.get(target, cache_module)
                 if cached:
                     cached_result = _deserialize_scan_result(cached)
                     cached_result.cache_hit = True
@@ -993,10 +1094,11 @@ async def scan_many(
                     return cached_result
             await wait_for_host_rate(target)
             result = await _async_scan_target(
-                client, target, timeout, follow_redirects, modules, plugin_dirs, cve_min_severity, progress
+                client, target, timeout, follow_redirects, modules, plugin_dirs,
+                cve_min_severity, dns, ssl_check, api_key, progress
             )
             if cache and not result.error:
-                cache.set(target, "scan", _serialize_scan_result(result))
+                cache.set(target, cache_module, _serialize_scan_result(result))
                 result.cache_hit = False
             return result
 

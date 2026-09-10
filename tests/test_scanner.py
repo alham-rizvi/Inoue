@@ -15,6 +15,10 @@ from core.scanner import (
     _get_whois,
     _normalize_version,
     _parse_cert_datetime,
+    _serialize_scan_result,
+    _deserialize_scan_result,
+    _scan_cache_module,
+    _async_scan_target,
     async_scan_many,
     build_recon_plan,
     build_service_summary,
@@ -94,6 +98,16 @@ class ScannerSummaryTests(unittest.TestCase):
         self.assertIn("error", result)
         self.assertIn("No address associated with hostname", result["error"])
 
+    def test_plugin_non_serializable_output_becomes_structured_error(self):
+        with TemporaryDirectory() as temp_dir:
+            plugin_path = Path(temp_dir) / "broken_plugin.py"
+            plugin_path.write_text("def run(result):\n    return {1, 2, 3}\n", encoding="utf-8")
+            result = ScanResult("https://example.com", "https://example.com", 200, 1)
+
+            outputs = run_plugins(result, [temp_dir])
+
+        self.assertIn("error", outputs["broken_plugin"])
+
     def test_cache_hit_marks_cached_scan_in_result(self):
         with TemporaryDirectory() as temp_dir:
             cache_path = str(Path(temp_dir) / "cache.db")
@@ -106,6 +120,72 @@ class ScannerSummaryTests(unittest.TestCase):
 
         self.assertFalse(first[0].cache_hit)
         self.assertTrue(second[0].cache_hit)
+
+    def test_cache_round_trip_preserves_recon_fields(self):
+        result = ScanResult(
+            url="https://example.com",
+            final_url="https://example.com/",
+            status_code=200,
+            response_time_ms=12.3,
+            dns_records={"A": ["192.0.2.1"]},
+            whois_info={"domain_name": "example.com"},
+            whois_summary={"domain": "example.com"},
+            subdomains=["api.example.com"],
+            mail_records=["mail.example.com"],
+            open_ports=[{"port": 443, "service": "https"}],
+            directories=[{"path": "/admin", "status_code": 403}],
+            extra_intel={"title": "Example"},
+        )
+
+        restored = _deserialize_scan_result(_serialize_scan_result(result))
+
+        self.assertEqual(restored.dns_records, result.dns_records)
+        self.assertEqual(restored.whois_info, result.whois_info)
+        self.assertEqual(restored.whois_summary, result.whois_summary)
+        self.assertEqual(restored.subdomains, result.subdomains)
+        self.assertEqual(restored.mail_records, result.mail_records)
+        self.assertEqual(restored.open_ports, result.open_ports)
+        self.assertEqual(restored.directories, result.directories)
+        self.assertEqual(restored.extra_intel, result.extra_intel)
+
+    def test_cache_key_changes_with_scan_configuration(self):
+        fast_key = _scan_cache_module(10, True, True, True, ["fast"], None, None, None)
+        full_key = _scan_cache_module(10, True, True, True, ["full-recon"], None, None, None)
+
+        self.assertNotEqual(fast_key, full_key)
+
+    def test_async_full_recon_populates_selected_modules(self):
+        response = MagicMock()
+        response.url = "https://example.com/"
+        response.status_code = 200
+        response.headers = {"server": "nginx"}
+        response.cookies.items.return_value = []
+        response.text = "<html><title>Example</title></html>"
+        client = MagicMock()
+        client.get = AsyncMock(return_value=response)
+
+        with patch("core.scanner._get_dns", return_value={"A": ["192.0.2.1"]}), \
+             patch("core.scanner._get_ssl_info", return_value={"available": True}), \
+             patch("core.scanner._get_whois", return_value={"domain_name": "example.com"}), \
+             patch("core.scanner._get_mail_records", return_value=["mail.example.com"]), \
+             patch("core.scanner.discover_subdomains", return_value=["api.example.com"]), \
+             patch("core.scanner._scan_common_ports", return_value=[{"port": 443}]), \
+             patch("core.scanner._enumerate_directories", return_value=[{"path": "/admin"}]), \
+             patch("core.scanner._fetch_public_intel", return_value={"source": "test"}):
+            result = asyncio.run(_async_scan_target(
+                client,
+                "https://example.com",
+                5,
+                True,
+                ["full-recon"],
+            ))
+
+        self.assertEqual(result.dns_records, {"A": ["192.0.2.1"]})
+        self.assertEqual(result.whois_info["domain_name"], "example.com")
+        self.assertEqual(result.mail_records, ["mail.example.com"])
+        self.assertEqual(result.subdomains, ["api.example.com"])
+        self.assertEqual(result.open_ports, [{"port": 443}])
+        self.assertEqual(result.directories, [{"path": "/admin"}])
 
     def test_markdown_and_html_output_files_are_renders_not_json(self):
         result = ScanResult(
