@@ -86,6 +86,8 @@ def render_result(result: ScanResult, verbose: bool = False, evidence: bool = Fa
     status_color = "green" if result.status_code < 300 else "yellow" if result.status_code < 400 else "red"
 
     console.print(f"  [dim]url[/dim]     {result.final_url}")
+    if getattr(result, "cache_hit", False):
+        console.print("  [yellow]cache[/yellow]  hit from local cache")
     console.print(f"  [dim]ip[/dim]      [cyan]{result.ip or 'unknown'}[/cyan]")
     console.print(f"  [dim]status[/dim]  [{status_color}]{result.status_code}[/{status_color}]  [dim]{result.response_time_ms}ms[/dim]")
     if result.server:
@@ -201,6 +203,8 @@ def render_result(result: ScanResult, verbose: bool = False, evidence: bool = Fa
         console.print(f"  [dim]issued to[/dim] {subject.get('commonName', '?')}")
         console.print(f"  [dim]issued by[/dim] {issuer.get('organizationName', '?')}")
         console.print(f"  [dim]valid[/dim]     {ssl.get('notBefore', '?')}  →  {ssl.get('notAfter', '?')}")
+        if ssl.get("sslyze"):
+            console.print(f"  [dim]tls detail[/dim] sslyze available: {ssl['sslyze'].get('protocols', ['?'])}")
         if ssl.get("san"):
             sans = ssl["san"][:6]
             console.print(f"  [dim]san[/dim]       {', '.join(sans)}" + (" ..." if len(ssl["san"]) > 6 else ""))
@@ -321,6 +325,7 @@ def result_to_dict(result: ScanResult) -> dict:
         "plugins": result.enriched.get("plugins", {}) if result.enriched else {},
         "notes": result.notes,
         "error": result.error,
+        "cache_hit": getattr(result, "cache_hit", False),
     }
 
 

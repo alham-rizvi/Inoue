@@ -12,7 +12,9 @@ from typer.testing import CliRunner
 from core.scanner import (
     Detection,
     ScanResult,
+    _get_whois,
     _normalize_version,
+    _parse_cert_datetime,
     async_scan_many,
     build_recon_plan,
     build_service_summary,
@@ -71,6 +73,40 @@ class ScannerSummaryTests(unittest.TestCase):
         ]:
             self.assertIsNone(_normalize_version(value))
 
+    def test_parse_cert_datetime_handles_gmt_and_iso_variants(self):
+        self.assertEqual(_parse_cert_datetime("Sep 10 19:27:31 2026 GMT"), "2026-09-10T19:27:31Z")
+        self.assertEqual(_parse_cert_datetime("2026-09-10T19:27:31Z"), "2026-09-10T19:27:31Z")
+        self.assertIsNone(_parse_cert_datetime("not-a-date"))
+
+    def test_parse_cert_datetime_preserves_iso_values_and_strips_empty_values(self):
+        self.assertEqual(_parse_cert_datetime("2026-09-10T19:27:31Z"), "2026-09-10T19:27:31Z")
+        self.assertIsNone(_parse_cert_datetime("   "))
+
+    def test_ubuntu_signature_requires_header_context_not_meta_description(self):
+        html = '<meta name="description" content="Interactive Ubuntu-style desktop portfolio">'
+        detections = run_fingerprints({}, {}, html)
+        self.assertNotIn("Ubuntu", {item.name for item in detections})
+
+    def test_whois_failures_are_structured_and_not_raw_stderr(self):
+        with patch("core.scanner.whois") as mock_whois:
+            mock_whois.whois.side_effect = RuntimeError("No address associated with hostname")
+            result = _get_whois("example.invalid")
+        self.assertIn("error", result)
+        self.assertIn("No address associated with hostname", result["error"])
+
+    def test_cache_hit_marks_cached_scan_in_result(self):
+        with TemporaryDirectory() as temp_dir:
+            cache_path = str(Path(temp_dir) / "cache.db")
+
+            async def run_once():
+                return await async_scan_many(["example.com"], workers=1, cache_path=cache_path, progress=lambda msg: None)
+
+            first = asyncio.run(run_once())
+            second = asyncio.run(run_once())
+
+        self.assertFalse(first[0].cache_hit)
+        self.assertTrue(second[0].cache_hit)
+
     def test_markdown_and_html_output_files_are_renders_not_json(self):
         result = ScanResult(
             url="https://example.com",
@@ -92,6 +128,24 @@ class ScannerSummaryTests(unittest.TestCase):
         self.assertIn("# Inoue reconnaissance report", markdown_report)
         self.assertIn("| Target | Technology |", markdown_report)
         self.assertNotIn("\"technologies\"", markdown_report)
+
+    def test_cli_output_files_in_markdown_and_html_are_rendered_not_raw_json(self):
+        runner = CliRunner()
+        with TemporaryDirectory() as temp_dir:
+            md_path = Path(temp_dir) / "report.md"
+            html_path = Path(temp_dir) / "report.html"
+
+            runner.invoke(app, ["--no-banner", "--json", "--output", str(md_path), "example.com"], catch_exceptions=False)
+            runner.invoke(app, ["--no-banner", "--json", "--output", str(html_path), "example.com"], catch_exceptions=False)
+
+            md_text = md_path.read_text(encoding="utf-8")
+            html_text = html_path.read_text(encoding="utf-8")
+
+        self.assertIn("# Inoue reconnaissance report", md_text)
+        self.assertNotIn("\"technologies\"", md_text)
+        self.assertIn("<html", html_text.lower())
+        self.assertIn("Inoue reconnaissance report", html_text)
+        self.assertNotIn("\"technologies\"", html_text)
 
     def test_run_fingerprints_detects_deeper_service_signatures(self):
         headers = {"Server": "Apache/2.4.49"}

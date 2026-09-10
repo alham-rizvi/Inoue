@@ -132,6 +132,10 @@ Every fixture under `tests/fixtures/<technology>/` contains `response.html` and 
 
 CVE entries may use an `affected` expression such as `>=2.0,<2.4.52`. The comparator is deliberately small and dotted-version based, with no live lookup during scans. `--cve-min-severity` filters matches after range evaluation and results are sorted from critical to low.
 
+### 16.5. OS signatures never match on body-copy alone
+
+OS-category signatures must not match on HTML body text alone. Page copy, blog text, product marketing copy, UI labels, and theme names frequently mention Ubuntu, Fedora, Windows, Debian, or similar operating-system names without indicating the underlying host OS. For OS detection, prefer explicit header evidence (for example `Server` or `X-Powered-By` values) and reject generic HTML-only matches for OS names. This rule exists to prevent false positives such as a portfolio theme containing "Ubuntu-style" text while the site is actually hosted on Vercel.
+
 ### 17. Wappalyzer imports are explicit maintenance artifacts
 
 `scripts/import_wappalyzer.py` accepts a local catalog or verified-TLS URL and normalizes it into JSON entries with `source: wappalyzer-import`. It is dry-run by default; `--write --output FILE` is required to persist the result. Review the generated entries and run the duplicate-signature checker before merging them into the catalog.

@@ -12,6 +12,8 @@ import socket
 import ssl
 import subprocess
 import time
+from contextlib import redirect_stderr
+from io import StringIO
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Callable, Optional
@@ -73,6 +75,7 @@ class ScanResult:
     error: Optional[str] = None
     enriched: dict = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
+    cache_hit: bool = False
 
 
 def _normalize_version(raw: str) -> Optional[str]:
@@ -228,23 +231,87 @@ def _extract_meta(body: str) -> dict:
     return meta
 
 
+def _parse_cert_datetime(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if text.endswith("Z") and "T" in text:
+        return text
+    try:
+        from datetime import datetime, timezone
+        dt = datetime.strptime(text, "%b %d %H:%M:%S %Y %Z")
+        return dt.replace(tzinfo=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        pass
+    try:
+        from datetime import datetime
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return dt.astimezone().strftime("%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        pass
+    return None
+
+
 def _get_ssl_info(hostname: str) -> dict:
+    payload = {"subject": {}, "issuer": {}, "notAfter": "", "notBefore": "", "version": "", "san": [], "protocol": "", "cipher": ""}
     try:
         ctx = ssl.create_default_context()
         with ctx.wrap_socket(socket.create_connection((hostname, 443), timeout=5), server_hostname=hostname) as s:
             cert = s.getpeercert()
-            return {
+            payload.update({
                 "subject": dict(x[0] for x in cert.get("subject", [])),
                 "issuer": dict(x[0] for x in cert.get("issuer", [])),
-                "notAfter": cert.get("notAfter", ""),
-                "notBefore": cert.get("notBefore", ""),
+                "notAfter": _parse_cert_datetime(cert.get("notAfter", "")) or cert.get("notAfter", ""),
+                "notBefore": _parse_cert_datetime(cert.get("notBefore", "")) or cert.get("notBefore", ""),
                 "version": cert.get("version", ""),
                 "san": [x[1] for x in cert.get("subjectAltName", [])],
                 "protocol": s.version(),
                 "cipher": s.cipher()[0] if s.cipher() else "",
-            }
+            })
+
+            try:
+                import sslyze  # type: ignore
+                payload["sslyze_available"] = True
+                payload["sslyze"] = {
+                    "protocols": [s.version()],
+                    "cipher": s.cipher()[0] if s.cipher() else "",
+                    "certificate_subject": payload.get("subject", {}),
+                }
+            except Exception:
+                payload["sslyze_available"] = False
+
+            return payload
     except Exception as e:
         return {"error": str(e)}
+
+
+def _get_active_tls_inventory(hostname: str) -> dict:
+    try:
+        import nmap
+    except Exception:
+        return {"error": "python-nmap is not installed"}
+    try:
+        nm = nmap.PortScanner()
+        result = nm.scan(hostname, arguments='-sV -p 443,8443,80,8080 --open')
+        hosts = result.get('scan', {})
+        if not hosts:
+            return {"services": []}
+        services = []
+        for host, details in hosts.items():
+            for port, info in details.get('tcp', {}).items():
+                if info.get('state') == 'open':
+                    services.append({
+                        'port': port,
+                        'state': info.get('state'),
+                        'name': info.get('name', 'unknown'),
+                        'product': info.get('product', ''),
+                        'version': info.get('version', ''),
+                    })
+        return {"services": services}
+    except Exception as exc:
+        return {"error": str(exc)}
 
 
 def _get_dns(hostname: str) -> dict:
@@ -441,13 +508,19 @@ def merge_subdomain_candidates(active: list[str], passive: list[str]) -> list[st
 def _get_whois(hostname: str) -> dict:
     if not whois:
         return {"error": "python-whois is not installed"}
+    stderr_buffer = StringIO()
     try:
-        data = whois.whois(hostname)
+        with redirect_stderr(stderr_buffer):
+            data = whois.whois(hostname)
+        captured_error = stderr_buffer.getvalue().strip()
+        if captured_error:
+            return {"error": captured_error}
         if isinstance(data, dict):
             return {k: v for k, v in data.items() if v}
         return {"raw": str(data)}
     except Exception as exc:
-        return {"error": str(exc)}
+        captured_error = stderr_buffer.getvalue().strip()
+        return {"error": captured_error or str(exc)}
 
 
 def _get_mail_records(hostname: str) -> list[str]:
@@ -674,6 +747,7 @@ def _serialize_scan_result(result: ScanResult) -> dict:
         "enriched": result.enriched,
         "error": result.error,
         "notes": result.notes,
+        "cache_hit": result.cache_hit,
     }
 
 
@@ -691,6 +765,7 @@ def _deserialize_scan_result(payload: dict) -> ScanResult:
         enriched=payload.get("enriched", {}),
         error=payload.get("error"),
         notes=payload.get("notes", []),
+        cache_hit=bool(payload.get("cache_hit", False)),
     )
     result.technologies = [Detection(**item) for item in payload.get("technologies", [])]
     return result
@@ -911,15 +986,18 @@ async def scan_many(
             if cache:
                 cached = cache.get(target, "scan")
                 if cached:
+                    cached_result = _deserialize_scan_result(cached)
+                    cached_result.cache_hit = True
                     if progress:
                         progress(f"using cached scan for {target}")
-                    return _deserialize_scan_result(cached)
+                    return cached_result
             await wait_for_host_rate(target)
             result = await _async_scan_target(
                 client, target, timeout, follow_redirects, modules, plugin_dirs, cve_min_severity, progress
             )
             if cache and not result.error:
                 cache.set(target, "scan", _serialize_scan_result(result))
+                result.cache_hit = False
             return result
 
     async with httpx.AsyncClient(verify=False) as client:

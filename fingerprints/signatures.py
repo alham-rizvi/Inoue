@@ -757,7 +757,7 @@ SIGNATURES = {'Apache': {'headers': {'Server': 'Apache(?:/(\\d+[\\d.]+))?'}, 'ca
  'Gogs': {'html': ['Gogs', 'gogs'], 'category': 'DevOps'},
  'Phabricator': {'html': ['Phabricator', 'phabricator'], 'category': 'DevOps'},
  'OpenSUSE': {'html': ['OpenSUSE', 'opensuse'], 'category': 'OS'},
- 'Ubuntu': {'html': ['Ubuntu', 'ubuntu'], 'category': 'OS'},
+ 'Ubuntu': {'headers': {'Server': 'Ubuntu|ubuntu'}, 'category': 'OS'},
  'Debian': {'html': ['Debian', 'debian'], 'category': 'OS'},
  'CentOS': {'html': ['CentOS', 'centos'], 'category': 'OS'},
  'Rocky Linux': {'html': ['Rocky Linux', 'rockylinux'], 'category': 'OS'},
