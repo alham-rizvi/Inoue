@@ -19,6 +19,7 @@ from core.scanner import (
     _deserialize_scan_result,
     _scan_cache_module,
     _async_scan_target,
+    scan,
     async_scan_many,
     build_recon_plan,
     build_service_summary,
@@ -186,6 +187,27 @@ class ScannerSummaryTests(unittest.TestCase):
         self.assertEqual(result.subdomains, ["api.example.com"])
         self.assertEqual(result.open_ports, [{"port": 443}])
         self.assertEqual(result.directories, [{"path": "/admin"}])
+
+    def test_redirected_scan_uses_final_url_for_detection_and_ip(self):
+        response = MagicMock()
+        response.url = "https://destination.example/wp-admin"
+        response.status_code = 200
+        response.headers = {}
+        response.cookies.items.return_value = []
+        response.text = ""
+        client = MagicMock()
+        client.__enter__.return_value = client
+        client.__exit__.return_value = None
+        client.get.return_value = response
+
+        with patch("core.scanner.httpx.Client", return_value=client), patch(
+            "core.scanner._resolve_ip", return_value="192.0.2.44"
+        ) as resolve_ip:
+            result = scan("https://source.example")
+
+        self.assertIn("WordPress", {item.name for item in result.technologies})
+        resolve_ip.assert_called_once_with("destination.example")
+        self.assertEqual(result.ip, "192.0.2.44")
 
     def test_markdown_and_html_output_files_are_renders_not_json(self):
         result = ScanResult(

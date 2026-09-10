@@ -26,6 +26,18 @@ python -m uvicorn api.main:app --host 0.0.0.0 --port 8000
 
 See [API.md](API.md) for endpoint payloads, authentication, and batch limits.
 
+## Browser extension
+
+Build Chrome and Firefox release archives for the local Python API:
+
+```bash
+python scripts/build_extension.py
+```
+
+Load `extension/` unpacked during development. The popup scans the active
+HTTP(S) tab through `POST /scan` using the `fast` module preset. Configure a
+different local API URL or API key from the popup settings.
+
 ## MCP server
 
 Install the optional dependency and start the stdio MCP server:

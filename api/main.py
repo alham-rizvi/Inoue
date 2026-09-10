@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import os
+import socket
 import time
 from collections import defaultdict
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 try:  # pragma: no cover - optional dependency
     from fastapi import FastAPI, HTTPException, Request
@@ -23,7 +26,7 @@ except ImportError:  # pragma: no cover - optional dependency
         def __init__(self, *args, **kwargs):
             pass
 
-from core.scanner import scan, scan_many
+from core.scanner import scan, scan_many, serialize_scan_result
 
 
 class ScanRequest(BaseModel):
@@ -42,6 +45,23 @@ class BatchRequest(BaseModel):
     cve_min_severity: Optional[str] = None
     workers: int = Field(5, ge=1, le=50)
     rate_limit: Optional[float] = Field(None, gt=0, le=100)
+
+
+def validate_public_target(target: str, allow_private: bool = False) -> None:
+    """Reject non-HTTP and private-network targets before an API scan."""
+    parsed = urlparse(target if "://" in target else f"https://{target}")
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise HTTPException(status_code=400, detail="Target must be an HTTP or HTTPS URL.")
+    if parsed.username or parsed.password:
+        raise HTTPException(status_code=400, detail="Target URLs may not contain credentials.")
+    if allow_private:
+        return
+    try:
+        addresses = {info[4][0] for info in socket.getaddrinfo(parsed.hostname, None, type=socket.SOCK_STREAM)}
+    except socket.gaierror:
+        raise HTTPException(status_code=400, detail="Target hostname could not be resolved.")
+    if any(not ipaddress.ip_address(address).is_global for address in addresses):
+        raise HTTPException(status_code=403, detail="Private and non-public targets are disabled by the API.")
 
 
 def create_app() -> Optional[FastAPI]:
@@ -81,35 +101,11 @@ def create_app() -> Optional[FastAPI]:
         from fingerprints.signatures import SIGNATURES
         return {"count": len(SIGNATURES), "signatures": sorted(SIGNATURES.keys())[:25]}
 
-    def serialize_result(result):
-        return {
-            "url": result.url,
-            "final_url": result.final_url,
-            "ip": result.ip,
-            "status_code": result.status_code,
-            "response_time_ms": result.response_time_ms,
-            "server": result.server,
-            "technologies": [tech.__dict__ for tech in result.technologies],
-            "headers": result.headers,
-            "dns": result.dns_records,
-            "ssl": result.ssl_info,
-            "tls_fingerprint": result.tls_fingerprint,
-            "whois": result.whois_info,
-            "whois_summary": result.whois_summary,
-            "subdomains": result.subdomains,
-            "mail_records": result.mail_records,
-            "open_ports": result.open_ports,
-            "directories": result.directories,
-            "extra_intel": result.extra_intel,
-            "recon": result.enriched.get("recon", []) if result.enriched else [],
-            "service_hints": result.enriched.get("service_hints", []) if result.enriched else [],
-            "plugins": result.enriched.get("plugins", {}) if result.enriched else {},
-            "notes": result.notes,
-            "error": result.error,
-            "cache_hit": result.cache_hit,
-        }
+    serialize_result = serialize_scan_result
+    allow_private_targets = os.getenv("INOUE_ALLOW_PRIVATE_TARGETS", "").lower() in {"1", "true", "yes"}
 
     async def scan_target(payload: ScanRequest):
+        validate_public_target(payload.target, allow_private_targets)
         result = await asyncio.to_thread(
             scan,
             payload.target,
@@ -117,12 +113,15 @@ def create_app() -> Optional[FastAPI]:
             follow_redirects=payload.follow_redirects,
             modules=payload.modules,
             cve_min_severity=payload.cve_min_severity,
+            allow_private_targets=allow_private_targets,
         )
         return serialize_result(result)
 
     async def scan_batch(payload: BatchRequest):
         if len(payload.targets) > max_batch_size:
             raise HTTPException(status_code=400, detail=f"Batch size exceeds {max_batch_size}")
+        for target in payload.targets:
+            validate_public_target(target, allow_private_targets)
         results = await scan_many(
             payload.targets,
             timeout=payload.timeout,
@@ -131,6 +130,7 @@ def create_app() -> Optional[FastAPI]:
             workers=payload.workers,
             rate_limit=payload.rate_limit,
             cve_min_severity=payload.cve_min_severity,
+            allow_private_targets=allow_private_targets,
         )
         return {
             "results": [serialize_result(item) for item in results]

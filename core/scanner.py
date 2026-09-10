@@ -8,6 +8,7 @@ Core scanning engine - fetches target and runs all detections concurrently.
 import os
 import asyncio
 import json
+import ipaddress
 import re
 import socket
 import ssl
@@ -18,7 +19,7 @@ from io import StringIO
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Callable, Optional
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 try:
     import whois
@@ -570,6 +571,50 @@ def _fetch_passive_subdomains(hostname: str) -> list[str]:
     return sorted(set(names))
 
 
+def _validate_public_url(url: str) -> None:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("target must be an HTTP or HTTPS URL")
+    try:
+        addresses = {info[4][0] for info in socket.getaddrinfo(parsed.hostname, None, type=socket.SOCK_STREAM)}
+    except socket.gaierror as exc:
+        raise ValueError("target hostname could not be resolved") from exc
+    if any(not ipaddress.ip_address(address).is_global for address in addresses):
+        raise ValueError("private and non-public targets are disabled")
+
+
+def _get_with_redirect_policy(client, url: str, headers: dict, timeout: int, follow_redirects: bool, allow_private_targets: bool):
+    if allow_private_targets:
+        return client.get(url, headers=headers, follow_redirects=follow_redirects, timeout=timeout)
+    current = url
+    for _ in range(10):
+        _validate_public_url(current)
+        response = client.get(current, headers=headers, follow_redirects=False, timeout=timeout)
+        if not follow_redirects or response.status_code not in {301, 302, 303, 307, 308}:
+            return response
+        location = response.headers.get("location")
+        if not location:
+            return response
+        current = urljoin(current, location)
+    raise ValueError("redirect limit exceeded")
+
+
+async def _async_get_with_redirect_policy(client, url: str, headers: dict, timeout: int, follow_redirects: bool, allow_private_targets: bool):
+    if allow_private_targets:
+        return await client.get(url, headers=headers, follow_redirects=follow_redirects, timeout=timeout)
+    current = url
+    for _ in range(10):
+        await asyncio.to_thread(_validate_public_url, current)
+        response = await client.get(current, headers=headers, follow_redirects=False, timeout=timeout)
+        if not follow_redirects or response.status_code not in {301, 302, 303, 307, 308}:
+            return response
+        location = response.headers.get("location")
+        if not location:
+            return response
+        current = urljoin(current, location)
+    raise ValueError("redirect limit exceeded")
+
+
 def discover_subdomains(hostname: str) -> list[str]:
     active = _guess_subdomains(hostname)
     passive = _fetch_passive_subdomains(hostname)
@@ -760,6 +805,36 @@ def _serialize_scan_result(result: ScanResult) -> dict:
     }
 
 
+def serialize_scan_result(result: ScanResult) -> dict:
+    """Return the stable public JSON contract shared by API consumers."""
+    return {
+        "url": result.url,
+        "final_url": result.final_url,
+        "ip": result.ip,
+        "status_code": result.status_code,
+        "response_time_ms": result.response_time_ms,
+        "server": result.server,
+        "technologies": [detection.__dict__ for detection in result.technologies],
+        "headers": result.headers,
+        "dns": result.dns_records,
+        "ssl": result.ssl_info,
+        "tls_fingerprint": result.tls_fingerprint,
+        "whois": result.whois_info,
+        "whois_summary": result.whois_summary,
+        "subdomains": result.subdomains,
+        "mail_records": result.mail_records,
+        "open_ports": result.open_ports,
+        "directories": result.directories,
+        "extra_intel": result.extra_intel,
+        "recon": result.enriched.get("recon", []) if result.enriched else [],
+        "service_hints": result.enriched.get("service_hints", []) if result.enriched else [],
+        "plugins": result.enriched.get("plugins", {}) if result.enriched else {},
+        "notes": result.notes,
+        "error": result.error,
+        "cache_hit": result.cache_hit,
+    }
+
+
 def _deserialize_scan_result(payload: dict) -> ScanResult:
     result = ScanResult(
         url=payload.get("url", ""),
@@ -916,6 +991,7 @@ async def _async_scan_target(
     ssl_enabled: bool = True,
     api_key: Optional[str] = None,
     progress: Optional[Callable[[str], None]] = None,
+    allow_private_targets: bool = True,
 ) -> ScanResult:
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
@@ -932,22 +1008,26 @@ async def _async_scan_target(
     started = time.perf_counter()
 
     try:
-        response = await client.get(
+        response = await _async_get_with_redirect_policy(
+            client,
             url,
             headers=headers_to_send,
             follow_redirects=follow_redirects,
             timeout=timeout,
+            allow_private_targets=allow_private_targets,
         )
     except httpx.ConnectError:
         if not url.startswith("https://"):
             result.error = "connection failed"
             return result
         try:
-            response = await client.get(
+            response = await _async_get_with_redirect_policy(
+                client,
                 url.replace("https://", "http://", 1),
                 headers=headers_to_send,
                 follow_redirects=follow_redirects,
                 timeout=timeout,
+                allow_private_targets=allow_private_targets,
             )
         except Exception as exc:
             result.error = str(exc)
@@ -959,6 +1039,7 @@ async def _async_scan_target(
     result.response_time_ms = round((time.perf_counter() - started) * 1000, 1)
     result.final_url = str(response.url)
     result.status_code = response.status_code
+    parsed = urlparse(result.final_url)
     result.headers = dict(response.headers)
     result.server = result.headers.get("server", "")
     cookies = {key: value for key, value in response.cookies.items()}
@@ -972,7 +1053,8 @@ async def _async_scan_target(
     result.notes = detect_contradictions(result.technologies)
     if "cve" in (modules or []) or "cves" in (modules or []):
         _correlate_detection_cves(result.technologies, min_severity=cve_min_severity)
-    result.ip = _resolve_ip(parsed.hostname or "")
+    hostname = parsed.hostname or ""
+    result.ip = _resolve_ip(hostname)
     plan = build_recon_plan(modules)
     result.enriched = {
         "services": build_service_summary(result),
@@ -982,7 +1064,6 @@ async def _async_scan_target(
         ],
     }
 
-    hostname = parsed.hostname or ""
     recon_results = {}
     tasks = []
     if plan.get("dns") and dns_enabled and hostname:
@@ -1052,6 +1133,7 @@ async def scan_many(
     plugin_dirs: Optional[list[str]] = None,
     progress: Optional[Callable[[str], None]] = None,
     cve_min_severity: Optional[str] = None,
+    allow_private_targets: bool = True,
 ) -> list[ScanResult]:
     """Scan multiple targets concurrently using one shared async HTTP client."""
     if not targets:
@@ -1095,7 +1177,8 @@ async def scan_many(
             await wait_for_host_rate(target)
             result = await _async_scan_target(
                 client, target, timeout, follow_redirects, modules, plugin_dirs,
-                cve_min_severity, dns, ssl_check, api_key, progress
+                cve_min_severity, dns, ssl_check, api_key, progress,
+                allow_private_targets,
             )
             if cache and not result.error:
                 cache.set(target, cache_module, _serialize_scan_result(result))
@@ -1375,6 +1458,7 @@ def scan(
     plugin_dirs: Optional[list[str]] = None,
     progress: Optional[Callable[[str], None]] = None,
     cve_min_severity: Optional[str] = None,
+    allow_private_targets: bool = True,
 ) -> ScanResult:
     def report(message: str):
         if progress:
@@ -1401,7 +1485,9 @@ def scan(
     try:
         t0 = time.time()
         with httpx.Client(timeout=timeout, follow_redirects=follow_redirects, verify=False) as client:
-            resp = client.get(url, headers=headers_to_send)
+            resp = _get_with_redirect_policy(
+                client, url, headers_to_send, timeout, follow_redirects, allow_private_targets
+            )
         result.response_time_ms = round((time.time() - t0) * 1000, 1)
         result.final_url = str(resp.url)
         result.status_code = resp.status_code
@@ -1414,7 +1500,9 @@ def scan(
         body = resp.text
 
         report(f"response received {result.status_code}")
-        result.technologies = run_fingerprints(resp_headers, cookies, body, url=url, progress=progress)
+        parsed = urlparse(result.final_url)
+        hostname = parsed.hostname or hostname
+        result.technologies = run_fingerprints(resp_headers, cookies, body, url=result.final_url, progress=progress)
         result.notes = detect_contradictions(result.technologies)
         if "cve" in (modules or []) or "cves" in (modules or []):
             _correlate_detection_cves(result.technologies, min_severity=cve_min_severity)
@@ -1425,7 +1513,9 @@ def scan(
             http_url = url.replace("https://", "http://")
             t0 = time.time()
             with httpx.Client(timeout=timeout, follow_redirects=follow_redirects) as client:
-                resp = client.get(http_url, headers=headers_to_send)
+                resp = _get_with_redirect_policy(
+                    client, http_url, headers_to_send, timeout, follow_redirects, allow_private_targets
+                )
             result.response_time_ms = round((time.time() - t0) * 1000, 1)
             result.final_url = str(resp.url)
             result.status_code = resp.status_code
@@ -1435,7 +1525,9 @@ def scan(
             cookies = {k: v for k, v in resp.cookies.items()}
             body = resp.text
             report(f"response received {result.status_code}")
-            result.technologies = run_fingerprints(resp_headers, cookies, body, url=http_url, progress=progress)
+            parsed = urlparse(result.final_url)
+            hostname = parsed.hostname or hostname
+            result.technologies = run_fingerprints(resp_headers, cookies, body, url=result.final_url, progress=progress)
             result.notes = detect_contradictions(result.technologies)
             if "cve" in (modules or []) or "cves" in (modules or []):
                 _correlate_detection_cves(result.technologies, min_severity=cve_min_severity)

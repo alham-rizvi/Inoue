@@ -29,12 +29,13 @@ class ApiBackendTests(unittest.TestCase):
             status_code=200,
             response_time_ms=4.2,
             ip="192.0.2.1",
+            headers={"server": "nginx"},
             dns_records={"A": ["192.0.2.1"]},
             technologies=[Detection("Nginx", "Web Server", version="1.26.0")],
         )
 
         async def run():
-            with patch("api.main.scan", return_value=expected) as mocked_scan:
+            with patch("api.main.validate_public_target"), patch("api.main.scan", return_value=expected) as mocked_scan:
                 response = await self.routes["/scan"](ScanRequest(target="example.com"))
             mocked_scan.assert_called_once_with(
                 "example.com",
@@ -42,12 +43,41 @@ class ApiBackendTests(unittest.TestCase):
                 follow_redirects=True,
                 modules=None,
                 cve_min_severity=None,
+                allow_private_targets=False,
             )
             return response
 
         payload = asyncio.run(run())
         self.assertEqual(payload["ip"], "192.0.2.1")
         self.assertEqual(payload["dns"], {"A": ["192.0.2.1"]})
+        self.assertEqual(payload["headers"], {"server": "nginx"})
+        self.assertEqual(payload["technologies"][0]["name"], "Nginx")
+
+    def test_extension_scan_request_preserves_fast_module_selection(self):
+        expected = ScanResult(
+            url="https://example.com",
+            final_url="https://example.com/",
+            status_code=200,
+            response_time_ms=1.0,
+            technologies=[Detection("Nginx", "Web Server", confidence="high")],
+        )
+
+        async def run():
+            with patch("api.main.validate_public_target"), patch("api.main.scan", return_value=expected) as mocked_scan:
+                response = await self.routes["/scan"](
+                    ScanRequest(target="https://example.com", modules=["fast"])
+                )
+            return mocked_scan, response
+
+        mocked_scan, payload = asyncio.run(run())
+        mocked_scan.assert_called_once_with(
+            "https://example.com",
+            timeout=10,
+            follow_redirects=True,
+            modules=["fast"],
+            cve_min_severity=None,
+            allow_private_targets=False,
+        )
         self.assertEqual(payload["technologies"][0]["name"], "Nginx")
 
     def test_batch_scan_returns_same_result_contract(self):
@@ -59,7 +89,7 @@ class ApiBackendTests(unittest.TestCase):
         )
 
         async def run():
-            with patch("api.main.scan_many", new=AsyncMock(return_value=[result])) as mocked_scan_many:
+            with patch("api.main.validate_public_target"), patch("api.main.scan_many", new=AsyncMock(return_value=[result])) as mocked_scan_many:
                 response = await self.routes["/scan/batch"](BatchRequest(targets=["example.com"]))
             mocked_scan_many.assert_awaited_once()
             return response
@@ -68,6 +98,12 @@ class ApiBackendTests(unittest.TestCase):
         self.assertEqual(len(payload["results"]), 1)
         self.assertIn("final_url", payload["results"][0])
         self.assertIn("extra_intel", payload["results"][0])
+
+    def test_api_rejects_private_target_before_scanning(self):
+        with self.assertRaises(Exception) as context:
+            asyncio.run(self.routes["/scan"](ScanRequest(target="http://127.0.0.1:8000")))
+
+        self.assertIn("Private and non-public", str(context.exception))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Inoue Web Stack Detector</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="header">
+      <div>
+        <p class="eyebrow">Inoue</p>
+        <h1>Web stack</h1>
+      </div>
+      <span id="connection" class="connection" aria-label="API connection status"></span>
+    </header>
+
+    <p id="target" class="target">Preparing active tab...</p>
+    <div id="scan-meta" class="scan-meta" hidden></div>
+    <button id="scan" class="primary" type="button">Detect stack</button>
+    <p id="status" class="status" role="status" aria-live="polite"></p>
+    <section id="results" class="results" aria-live="polite"></section>
+
+    <details class="settings">
+      <summary>Python API settings</summary>
+      <label for="api-url">API URL</label>
+      <input id="api-url" type="url" placeholder="http://127.0.0.1:8000">
+      <label for="api-key">API key <span>(optional)</span></label>
+      <input id="api-key" type="password" autocomplete="off" placeholder="INOUE_API_KEY">
+      <button id="save" class="secondary" type="button">Save settings</button>
+    </details>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>

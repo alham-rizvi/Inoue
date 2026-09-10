@@ -10,6 +10,7 @@ scanning read-only:
 - best-effort TLS metadata and known CDN/WAF fingerprint matching;
 - optional FastAPI endpoints for health, signature, single-target, and batch scans;
 - async/API scans preserve selected recon modules, use bounded request validation, and return the full scan result contract;
+- shared Chrome and Firefox extension for detecting the active tab's web stack through the local Python API;
 - Wappalyzer catalog normalization with duplicate compatibility checks;
 - offline CVE correlation with optional EPSS scores and explicit refresh only;
 - Python 3.12 CI coverage and PyPI package publishing through GitHub Actions.
@@ -35,6 +36,16 @@ Install optional MCP support with:
 python -m pip install "inoue[mcp]"
 inoue-mcp
 ```
+
+The browser extension is built from the same repository for both Chrome and
+Firefox. Start the API, then package it with:
+
+```bash
+python -m uvicorn api.main:app --host 127.0.0.1 --port 8000
+python scripts/build_extension.py
+```
+
+Load the generated ZIP or the `extension/` directory as an unpacked extension.
 
 The MCP server uses stdio and exposes local catalog search, catalog summaries,
 and the existing read-only scan path for MCP clients.
