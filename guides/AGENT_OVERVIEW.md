@@ -16,12 +16,12 @@ It is aimed at:
 
 ## Repository layout
 
-- `inoue.py` — command-line entry point and user-facing output
-- `core/scanner.py` — scan orchestration, fingerprint matching, recon modules, and helper functions
-- `fingerprints/signatures.py` — signature catalog used for detection
-- `fingerprints/extended_catalog.py` — supplementary signature set and extended technology mapping
-- `tests/test_scanner.py` — regression tests for detection and CLI behavior
-- `SECURITY.md` — supported version and valid security reporting expectations
+- `inoue.py` for the command line entry point and user facing output
+- `core/scanner.py` for scan orchestration, fingerprint matching, recon modules, and helper functions
+- `fingerprints/signatures.py` for the signature catalog used in detection
+- `fingerprints/extended_catalog.py` for the supplementary signature set and extended technology mapping
+- `tests/test_scanner.py` for regression tests covering detection and CLI behavior
+- `SECURITY.md` for the supported version and valid security reporting expectations
 
 ## High-level execution flow
 

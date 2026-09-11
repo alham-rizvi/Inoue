@@ -15,19 +15,19 @@ The scanner is intentionally conservative: it uses observable evidence, keeps th
 
 ## Repository map
 
-- `inoue.py` — CLI entry point and result rendering
-- `api/main.py` — optional FastAPI server for scan and signature endpoints
-- `core/scanner.py` — detection engine, recon orchestration, network helpers, and result serialization
-- `core/config.py` — configuration precedence and local defaults
-- `core/cache.py` — optional SQLite-backed scan caching
-- `core/cve.py` — local CVE matching logic
-- `core/plugins.py` — plugin loading and error isolation
-- `core/terminal.py` — Rich terminal formatting settings
-- `fingerprints/signatures.py` — primary catalog for service and technology detection
-- `fingerprints/extended_catalog.py` — additional catalog entries and complementary signatures
-- `fingerprints/web_server_catalog.py` — server-family, reverse-proxy, and forwarding-proxy entries
-- `scripts/` — validation, import, and release tooling
-- `tests/` — scanner, API, and extension regression coverage
+- `inoue.py` for the CLI entry point and result rendering
+- `api/main.py` for the optional FastAPI server for scan and signature endpoints
+- `core/scanner.py` for the detection engine, recon orchestration, network helpers, and result serialization
+- `core/config.py` for configuration precedence and local defaults
+- `core/cache.py` for optional SQLite backed scan caching
+- `core/cve.py` for local CVE matching logic
+- `core/plugins.py` for plugin loading and error isolation
+- `core/terminal.py` for Rich terminal formatting settings
+- `fingerprints/signatures.py` for the primary catalog for service and technology detection
+- `fingerprints/extended_catalog.py` for additional catalog entries and complementary signatures
+- `fingerprints/web_server_catalog.py` for server family, reverse proxy, and forwarding proxy entries
+- `scripts/` for validation, import, and release tooling
+- `tests/` for scanner, API, and extension regression coverage
 
 ## Execution model
 

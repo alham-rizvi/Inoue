@@ -4,8 +4,8 @@ This folder contains the implementation and operations notes that are too detail
 
 ## Available guides
 
-- [backend.md](backend.md) — API, scanner orchestration, and security model
-- [project-overview.md](project-overview.md) — repo purpose, component map, and expected workflow
+- [backend.md](backend.md) for API, scanner orchestration, and the security model
+- [project-overview.md](project-overview.md) for the repo purpose, component map, and expected workflow
 
 ## Recommended reading order
 
