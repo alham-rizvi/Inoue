@@ -1185,9 +1185,13 @@ async def scan_many(
                 result.cache_hit = False
             return result
 
-    async with httpx.AsyncClient(verify=False) as client:
-        tasks = [asyncio.create_task(_scan_one(target)) for target in targets]
-        return list(await asyncio.gather(*tasks))
+    try:
+        async with httpx.AsyncClient(verify=False) as client:
+            tasks = [asyncio.create_task(_scan_one(target)) for target in targets]
+            return list(await asyncio.gather(*tasks))
+    finally:
+        if cache is not None:
+            cache.close()
 
 
 async_scan_many = scan_many

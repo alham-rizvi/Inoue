@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from typer.testing import CliRunner
 
+from core.cache import ScanCache
 from core.scanner import (
     Detection,
     ScanResult,
@@ -148,6 +149,13 @@ class ScannerSummaryTests(unittest.TestCase):
         self.assertEqual(restored.open_ports, result.open_ports)
         self.assertEqual(restored.directories, result.directories)
         self.assertEqual(restored.extra_intel, result.extra_intel)
+
+    def test_cache_closes_database_connections_on_cleanup(self):
+        with TemporaryDirectory() as temp_dir:
+            cache_path = str(Path(temp_dir) / "cache.db")
+            cache = ScanCache(cache_path)
+            cache.close()
+            self.assertIsNone(cache._connection)
 
     def test_cache_key_changes_with_scan_configuration(self):
         fast_key = _scan_cache_module(10, True, True, True, ["fast"], None, None, None)

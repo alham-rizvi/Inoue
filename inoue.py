@@ -75,11 +75,22 @@ CATEGORY_COLORS = {
 
 
 def print_banner():
-    console.print(r"""[bold white]    _                      
-   (_)___  ____  __  _____ 
-  / / __ \/ __ \/ / / / _ \
- / / / / / /_/ / /_/ /  __/
-/_/_/ /_/\____/\__,_/\___/ """ + f"[/bold white][dim]v{APP_VERSION}  tech stack fingerprinting[/dim]\n")
+    console.print(r"""[bold white]  .-.
+ (   )
+  `-'
+  /\
+ /  \        [dim]Inoue[/dim]
+/____\   [bright_white]tech stack fingerprinting[/bright_white]
+""" + f"[dim]   v{APP_VERSION}[/dim]\n")
+
+
+def emit_cli_error(message: str, *, detail: Optional[str] = None, hint: Optional[str] = None, exit_code: int = 1) -> None:
+    console.print(f"[red]error[/red] {message}")
+    if detail:
+        console.print(f"  [dim]{detail}[/dim]")
+    if hint:
+        console.print(f"  [yellow]hint[/yellow] {hint}")
+    raise typer.Exit(exit_code)
 
 
 def render_result(result: ScanResult, verbose: bool = False, evidence: bool = False, modules: Optional[list[str]] = None):
@@ -449,8 +460,9 @@ def about():
     console.print("Repository: https://github.com/alhamrizvi-cloud/Inoue")
     console.print("Presets: fast, full-recon, all")
     console.print("Examples:")
-    console.print("  - python inoue.py -m fast https://target.example")
-    console.print("  - python inoue.py -m full-recon https://target.example")
+    console.print("  - inoue -m fast https://target.example")
+    console.print("  - inoue -m full-recon https://target.example")
+    console.print("  - inoue --json -o report.json https://target.example")
 
 
 @app.command("update-cve")
@@ -566,10 +578,22 @@ def main(
         update_cve(source_url=source_url, output=output_path)
         raise typer.Exit()
 
-    targets = load_targets(targets, list_file)
+    try:
+        targets = load_targets(targets, list_file)
+    except OSError as exc:
+        emit_cli_error(
+            "Unable to read the supplied target list.",
+            detail=str(exc),
+            hint="Check the file path and permissions, then retry with inoue --help.",
+            exit_code=2,
+        )
     if not targets:
-        typer.echo("Missing target(s).", err=True)
-        raise typer.Exit(2)
+        emit_cli_error(
+            "No target(s) were provided.",
+            detail="Usage: inoue <target> [<target> ...] | inoue -l targets.txt",
+            hint="Run 'inoue --help' for the full CLI reference.",
+            exit_code=2,
+        )
 
     if not no_banner and not json_out:
         print_banner()
@@ -703,23 +727,40 @@ def main(
                         maybe_capture_tls(result)
                         results.append(result)
                     except Exception as e:
-                        console.print(f"  [red]error[/red] {target}: {e}")
+                        console.print(f"  [red]error[/red] {target}")
+                        console.print(f"    [dim]{type(e).__name__}: {e}[/dim]")
 
     if nuclei_out:
-        write_nuclei_export(results, nuclei_out)
-        console.print(f"  [green]saved[/green] {nuclei_out}")
+        try:
+            write_nuclei_export(results, nuclei_out)
+            console.print(f"  [green]saved[/green] {nuclei_out}")
+        except Exception as exc:
+            emit_cli_error(
+                "Failed to write the nuclei export.",
+                detail=str(exc),
+                hint=f"Check permissions and the output path: {nuclei_out}",
+                exit_code=1,
+            )
 
     if json_out or output:
         json_str = json.dumps([result_to_dict(result) for result in results], indent=2)
         if output:
             suffix = Path(output).suffix.lower()
-            if suffix == ".html":
-                Path(output).write_text(render_html_report(results), encoding="utf-8")
-            elif suffix == ".md":
-                Path(output).write_text(render_markdown_report(results), encoding="utf-8")
-            else:
-                Path(output).write_text(json_str, encoding="utf-8")
-            console.print(f"  [green]saved[/green] {output}")
+            try:
+                if suffix == ".html":
+                    Path(output).write_text(render_html_report(results), encoding="utf-8")
+                elif suffix == ".md":
+                    Path(output).write_text(render_markdown_report(results), encoding="utf-8")
+                else:
+                    Path(output).write_text(json_str, encoding="utf-8")
+                console.print(f"  [green]saved[/green] {output}")
+            except OSError as exc:
+                emit_cli_error(
+                    "Unable to write the output file.",
+                    detail=str(exc),
+                    hint=f"Verify that the path is writable: {output}",
+                    exit_code=1,
+                )
         if json_out:
             print(json_str)
         exit_code = result_exit_code(results, bool(cve), fail_on_cve)

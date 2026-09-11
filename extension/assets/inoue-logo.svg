@@ -1,0 +1,10 @@
+<svg width="520" height="220" viewBox="0 0 520 220" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="520" height="220" fill="#050505"/>
+  <g transform="translate(30 30)">
+    <circle cx="68" cy="80" r="58" fill="#F4F4F4"/>
+    <circle cx="108" cy="80" r="58" fill="#050505"/>
+    <path d="M120 80C120 52.3858 100.614 31 77.5 31H68C42.595 31 22 51.595 22 77V164C22 189.405 42.595 210 68 210H77.5C100.614 210 120 188.614 120 161V80Z" fill="#F4F4F4"/>
+    <circle cx="128" cy="80" r="16" fill="#F4F4F4"/>
+  </g>
+  <text x="220" y="124" fill="#F4F4F4" font-family="Segoe UI, Arial, sans-serif" font-weight="500" font-size="88" letter-spacing="-4">inoue</text>
+</svg>
