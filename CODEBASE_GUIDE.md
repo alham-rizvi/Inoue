@@ -29,6 +29,7 @@ This is a recon and surface-analysis tool, not a privileged exploitation framewo
 - `README.md` — public project overview and usage examples
 - `GUIDE.md` — catalog extension and version-detection guidance
 - `COMMANDS.md` — CLI command reference
+- `guides/` — deeper implementation notes, backend architecture, and project-maintenance write-ups
 - `SECURITY.md` — supported versions and valid security reporting policy
 
 ## Critical design decisions

@@ -140,6 +140,11 @@ python inoue.py update
 
 For a full command reference, see [COMMANDS.md](COMMANDS.md).
 
+For deeper implementation notes and backend context, see the project guides in
+[guides/README.md](guides/README.md). The folder includes an overview of the
+project layout, the scanner/API architecture, and maintenance notes that are
+not needed in the root landing pages.
+
 For installation, MCP, terminal themes, Docker, verification, and release
 publishing, see [the repository wiki guide](docs/WIKI.md).
 
