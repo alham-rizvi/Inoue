@@ -75,13 +75,11 @@ CATEGORY_COLORS = {
 
 
 def print_banner():
-    console.print(r"""[bold white]  .-.
- (   )
-  `-'
-  /\
- /  \        [dim]Inoue[/dim]
-/____\   [bright_white]tech stack fingerprinting[/bright_white]
-""" + f"[dim]   v{APP_VERSION}[/dim]\n")
+    console.print(r"""[bold white]    _                      
+   (_)___  ____  __  _____ 
+  / / __ \/ __ \/ / / / _ \
+ / / / / / /_/ / /_/ /  __/
+/_/_/ /_/\____/\__,_/\___/ """ + f"[/bold white][dim]v{APP_VERSION}  tech stack\nfingerprinting[/dim]\n")
 
 
 def emit_cli_error(message: str, *, detail: Optional[str] = None, hint: Optional[str] = None, exit_code: int = 1) -> None:
