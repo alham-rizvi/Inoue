@@ -213,6 +213,20 @@ def render_result(result: ScanResult, verbose: bool = False, evidence: bool = Fa
                 console.print(f"  [cyan]{key}[/cyan] {value}")
         if summary.get("nameservers"):
             console.print(f"  [cyan]nameservers[/cyan] {', '.join(summary['nameservers'][:6])}")
+        rdap = result.whois_info.get("rdap", {})
+        if isinstance(rdap, dict):
+            if rdap.get("status"):
+                console.print(f"  [cyan]status[/cyan] {', '.join(rdap['status'][:8])}")
+            if rdap.get("events"):
+                for name, value in rdap["events"].items():
+                    console.print(f"  [cyan]{name}[/cyan] {value}")
+            for entity in rdap.get("entities", [])[:8]:
+                label = ", ".join(entity.get("roles", [])) or "entity"
+                identity = entity.get("org") or entity.get("fn") or entity.get("handle")
+                if identity:
+                    console.print(f"  [cyan]{label}[/cyan] {identity}")
+            if rdap.get("url"):
+                console.print(f"  [cyan]rdap source[/cyan] {rdap['url']}")
         console.print()
 
     if result.extra_intel and show_module("extra"):

@@ -14,6 +14,7 @@ from core.scanner import (
     Detection,
     ScanResult,
     _get_whois,
+    _get_rdap_details,
     _normalize_version,
     _parse_cert_datetime,
     _serialize_scan_result,
@@ -111,6 +112,26 @@ class ScannerSummaryTests(unittest.TestCase):
             result = _get_whois("example.invalid")
         self.assertIn("error", result)
         self.assertIn("No address associated with hostname", result["error"])
+
+    @patch("core.scanner.httpx.Client")
+    def test_rdap_details_are_structured_and_json_safe(self, mock_client):
+        response = MagicMock(status_code=200)
+        response.json.return_value = {
+            "handle": "EXAMPLE",
+            "ldhName": "example.com",
+            "status": ["active"],
+            "events": [{"eventAction": "registration", "eventDate": "2024-01-01T00:00:00Z"}],
+            "nameservers": [{"ldhName": "ns1.example.com"}],
+            "entities": [{"handle": "REG-1", "roles": ["registrar"], "vcardArray": ["vcard", [["fn", {}, "text", "Example Registrar"]]]}],
+        }
+        mock_client.return_value.__enter__.return_value.get.return_value = response
+
+        details = _get_rdap_details("example.com")
+
+        self.assertEqual(details["ldh_name"], "example.com")
+        self.assertEqual(details["events"]["registration"], "2024-01-01T00:00:00Z")
+        self.assertEqual(details["nameservers"], ["ns1.example.com"])
+        self.assertEqual(details["entities"][0]["fn"], "Example Registrar")
 
     def test_plugin_non_serializable_output_becomes_structured_error(self):
         with TemporaryDirectory() as temp_dir:

@@ -518,11 +518,84 @@ def _get_whois(hostname: str) -> dict:
         if captured_error:
             return {"error": captured_error}
         if isinstance(data, dict):
-            return {k: v for k, v in data.items() if v}
+            details = {k: _json_safe(v) for k, v in data.items() if v}
+            rdap = _get_rdap_details(hostname)
+            if rdap:
+                details["rdap"] = rdap
+                details["sources"] = {
+                    "python_whois": "local WHOIS server lookup",
+                    "rdap": f"https://rdap.org/domain/{hostname}",
+                }
+            return details
         return {"raw": str(data)}
     except Exception as exc:
         captured_error = stderr_buffer.getvalue().strip()
         return {"error": captured_error or str(exc)}
+
+
+def _json_safe(value):
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(item) for item in value]
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+def _get_rdap_details(hostname: str) -> dict:
+    try:
+        endpoint = f"https://rdap.org/domain/{hostname}"
+        with httpx.Client(timeout=5, verify=True, follow_redirects=True) as client:
+            response = client.get(endpoint, headers={"Accept": "application/rdap+json, application/json"})
+        if response.status_code != 200:
+            return {"error": f"RDAP returned HTTP {response.status_code}", "url": endpoint}
+        payload = response.json()
+        if not isinstance(payload, dict):
+            return {"error": "RDAP returned a non-object response", "url": endpoint}
+
+        events = {}
+        for event in payload.get("events", []):
+            if isinstance(event, dict) and event.get("eventAction"):
+                events[event["eventAction"]] = event.get("eventDate", "")
+
+        nameservers = [
+            item.get("ldhName")
+            for item in payload.get("nameservers", [])
+            if isinstance(item, dict) and item.get("ldhName")
+        ]
+        entities = []
+        for entity in payload.get("entities", []):
+            if not isinstance(entity, dict):
+                continue
+            record = {"handle": entity.get("handle"), "roles": entity.get("roles", [])}
+            vcard = entity.get("vcardArray")
+            if isinstance(vcard, list) and len(vcard) > 1 and isinstance(vcard[1], list):
+                for field in vcard[1]:
+                    if not isinstance(field, list) or len(field) < 4:
+                        continue
+                    name, value = field[0], field[3]
+                    if name in {"fn", "org", "email", "tel", "adr"} and value:
+                        record[name] = value
+            entities.append({key: value for key, value in record.items() if value})
+
+        return _json_safe({
+            "url": endpoint,
+            "handle": payload.get("handle"),
+            "ldh_name": payload.get("ldhName"),
+            "unicode_name": payload.get("unicodeName"),
+            "status": payload.get("status", []),
+            "events": events,
+            "nameservers": nameservers,
+            "entities": entities,
+            "secure_dns": payload.get("secureDNS", {}),
+            "port43": payload.get("port43"),
+            "raw": payload,
+        })
+    except Exception as exc:
+        return {"error": str(exc), "url": f"https://rdap.org/domain/{hostname}"}
 
 
 def _get_mail_records(hostname: str) -> list[str]:

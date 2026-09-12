@@ -22,6 +22,21 @@ curl -X POST http://localhost:8000/scan \
   -d '{"target":"https://example.com","modules":["headers","tech"]}'
 ```
 
+Request detailed WHOIS and RDAP data for a domain:
+
+```bash
+curl -sS -X POST http://localhost:8000/scan \
+  -H 'Content-Type: application/json' \
+  -d '{"target":"https://github.com","modules":["whois"]}' \
+  | python -m json.tool
+```
+
+The response includes `whois`, `whois_summary`, and, when RDAP is available,
+`whois.rdap` with domain status, lifecycle events, registrar/contact entities,
+nameservers, DNSSEC data, the source URL, and the raw RDAP response. The
+lookup uses the local WHOIS client plus the public standards-based RDAP
+service; no API key is required.
+
 ## Batch scan
 
 ```bash
