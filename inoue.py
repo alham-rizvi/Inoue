@@ -262,6 +262,7 @@ def render_result(result: ScanResult, verbose: bool = False, evidence: bool = Fa
         console.print()
 
     if show_module("headers"):
+        normalized_headers = {str(key).lower(): value for key, value in result.headers.items()}
         sec_headers = [
             "Strict-Transport-Security", "Content-Security-Policy", "X-Frame-Options",
             "X-XSS-Protection", "X-Content-Type-Options", "Referrer-Policy",
@@ -269,7 +270,7 @@ def render_result(result: ScanResult, verbose: bool = False, evidence: bool = Fa
         ]
         console.print("  [dim]── security headers ────────────────────[/dim]")
         for h in sec_headers:
-            v = result.headers.get(h, result.headers.get(h.lower(), ""))
+            v = normalized_headers.get(h.lower(), "")
             if v:
                 console.print(f"  [green]+[/green] [dim]{h}[/dim]")
             else:

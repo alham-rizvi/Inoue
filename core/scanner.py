@@ -147,12 +147,40 @@ def _extract_version(pattern: str, text: str) -> Optional[str]:
     return None
 
 
+def _extract_deep_version(text: str) -> Optional[str]:
+    """Extract versions from common asset, metadata, and release conventions."""
+    if not text:
+        return None
+
+    patterns = [
+        r'(?i)(?:[?&]|\b)(?:v|ver|version|release|build|rev|revision)[-_:=]?\s*(\d+(?:[._-]\d+){1,3})',
+        r'(?i)\b(?:version|release|build|revision)\s*[:=]?\s*["\']?(\d+(?:[._-]\d+){1,3})',
+        r'(?i)(?:data-(?:version|release)|(?:version|release|build))\s*=\s*["\'](\d+(?:[._-]\d+){1,3})',
+        r'(?i)(?:^|[/_.-])v?(\d+\.\d+(?:\.\d+){0,2})(?=$|[/_.?&#-])',
+    ]
+    for regex in patterns:
+        for match in re.finditer(regex, text):
+            normalized = _normalize_version(match.group(1))
+            if normalized:
+                return normalized
+    return None
+
+
+def _header_value(headers: dict, name: str, default: str = "") -> str:
+    target = name.lower()
+    for key, value in headers.items():
+        if str(key).lower() == target:
+            return value or default
+    return default
+
+
 def _match_headers(sig: dict, headers: dict) -> tuple[bool, Optional[str], str]:
     """Returns (matched, version, evidence)."""
     for header_name, pattern in sig.get("headers", {}).items():
-        val = headers.get(header_name, "") or headers.get(header_name.lower(), "")
+        val = _header_value(headers, header_name)
         if val and pattern.search(val):
             version = _extract_version(pattern.pattern if hasattr(pattern, "pattern") else str(pattern), val)
+            version = version or _extract_deep_version(val)
             return True, version, f"{header_name}: {val[:80]}"
     return False, None, ""
 
@@ -170,7 +198,9 @@ def _match_html(sig: dict, body: str) -> tuple[bool, Optional[str], str]:
         m = pattern.search(body)
         if m:
             snippet = body[max(0, m.start()-20):m.end()+20].strip().replace("\n", " ")
-            version = _extract_version(pattern.pattern if hasattr(pattern, "pattern") else str(pattern), body[m.start():m.end() + 80])
+            evidence_text = body[max(0, m.start() - 120):m.end() + 240]
+            version = _extract_version(pattern.pattern if hasattr(pattern, "pattern") else str(pattern), evidence_text)
+            version = version or _extract_deep_version(evidence_text)
             return True, version, f"HTML: …{snippet[:60]}…"
     return False, None, ""
 
@@ -207,6 +237,7 @@ def _match_scripts(sig: dict, scripts: list[str]) -> tuple[bool, Optional[str], 
                     pass
                 if not version:
                     version = _extract_version(pattern.pattern if hasattr(pattern, "pattern") else str(pattern), src)
+                version = version or _extract_deep_version(src)
                 return True, version, f"Script: {src[:80]}"
     return False, None, ""
 
@@ -216,6 +247,7 @@ def _match_meta(sig: dict, meta: dict) -> tuple[bool, Optional[str], str]:
         val = meta.get(meta_name, "")
         if val and pattern.search(val):
             version = _extract_version(pattern.pattern if hasattr(pattern, "pattern") else str(pattern), val)
+            version = version or _extract_deep_version(val)
             return True, version, f"Meta {meta_name}: {val[:60]}"
     return False, None, ""
 
@@ -837,7 +869,7 @@ def _collect_company_intel(hostname: str, body: str = "", headers: Optional[dict
     if hostname:
         intel["hostname"] = hostname
     if headers:
-        server = headers.get("server") or headers.get("Server")
+        server = _header_value(headers, "server")
         if server:
             intel["server"] = server
     return intel
@@ -1121,7 +1153,7 @@ async def _async_scan_target(
     result.status_code = response.status_code
     parsed = urlparse(result.final_url)
     result.headers = dict(response.headers)
-    result.server = result.headers.get("server", "")
+    result.server = _header_value(result.headers, "server")
     cookies = {key: value for key, value in response.cookies.items()}
     result.technologies = run_fingerprints(
         result.headers,
@@ -1596,7 +1628,7 @@ def scan(
 
         resp_headers = dict(resp.headers)
         result.headers = resp_headers
-        result.server = resp_headers.get("server", resp_headers.get("Server", ""))
+        result.server = _header_value(resp_headers, "server")
 
         cookies = {k: v for k, v in resp.cookies.items()}
         body = resp.text
@@ -1630,7 +1662,7 @@ def scan(
             result.status_code = resp.status_code
             resp_headers = dict(resp.headers)
             result.headers = resp_headers
-            result.server = resp_headers.get("server", "")
+            result.server = _header_value(resp_headers, "server")
             cookies = {k: v for k, v in resp.cookies.items()}
             body = resp.text
             report(f"response received {result.status_code}")

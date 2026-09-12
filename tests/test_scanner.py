@@ -15,6 +15,8 @@ from core.scanner import (
     ScanResult,
     _get_whois,
     _get_rdap_details,
+    _extract_deep_version,
+    _header_value,
     _normalize_version,
     _parse_cert_datetime,
     _serialize_scan_result,
@@ -82,6 +84,18 @@ class ScannerSummaryTests(unittest.TestCase):
         self.assertIn("Nginx", names)
         self.assertNotIn("WordPress", names)
 
+    def test_header_matching_is_case_insensitive(self):
+        detections = run_fingerprints(
+            {"sErVeR": "nginx/1.26.1"},
+            {},
+            "",
+            sources={"headers"},
+        )
+
+        detected = {item.name: item for item in detections}
+        self.assertEqual(detected["Nginx"].version, "1.26.1")
+        self.assertEqual(_header_value({"X-Test": "value"}, "x-test"), "value")
+
     def test_normalize_version_rejects_timestamp_like_strings(self):
         for value in [
             "1789011933767.02",
@@ -91,6 +105,12 @@ class ScannerSummaryTests(unittest.TestCase):
             "bom1::iad1::abc-1789011933767-3f7a9d",
         ]:
             self.assertIsNone(_normalize_version(value))
+
+    def test_deep_version_extraction_supports_assets_metadata_and_releases(self):
+        self.assertEqual(_extract_deep_version("/assets/app.js?ver=3.23.0"), "3.23.0")
+        self.assertEqual(_extract_deep_version('data-version="6.4.2"'), "6.4.2")
+        self.assertEqual(_extract_deep_version("release: 2024.10.3"), "2024.10.3")
+        self.assertEqual(_extract_deep_version("/static/framework-v2.7.1.min.js"), "2.7.1")
 
     def test_parse_cert_datetime_handles_gmt_and_iso_variants(self):
         self.assertEqual(_parse_cert_datetime("Sep 10 19:27:31 2026 GMT"), "2026-09-10T19:27:31Z")
