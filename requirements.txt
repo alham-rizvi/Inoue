@@ -8,3 +8,7 @@ beautifulsoup4>=4.12
 sslyze>=6.0.0
 python-nmap>=0.7.1
 tomli>=2.0; python_version < "3.11"
+
+# Optional: enables Shodan-style mmh3 favicon hashing (core/favicon.py).
+# md5 favicon hashing works fine without it.
+mmh3>=4.0

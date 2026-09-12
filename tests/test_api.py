@@ -44,6 +44,7 @@ class ApiBackendTests(unittest.TestCase):
                 modules=None,
                 cve_min_severity=None,
                 allow_private_targets=False,
+                crawl_pages=0,
             )
             return response
 
@@ -77,6 +78,7 @@ class ApiBackendTests(unittest.TestCase):
             modules=["fast"],
             cve_min_severity=None,
             allow_private_targets=False,
+            crawl_pages=0,
         )
         self.assertEqual(payload["technologies"][0]["name"], "Nginx")
 

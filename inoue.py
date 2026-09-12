@@ -571,6 +571,70 @@ def update_cve(
         raise typer.Exit(1)
 
 
+def run_history_command(
+    target: str,
+    history_path: Optional[str] = None,
+    limit: int = 20,
+    json_out: bool = False,
+):
+    """Show how a target's tech stack, CVEs, ports, and certificate changed across saved scans.
+
+    Snapshots are only recorded when a scan is run with --save-history, so
+    run a few scans over time before expecting a timeline here.
+    """
+    from core.history import DEFAULT_HISTORY_PATH, build_timeline, list_snapshots
+
+    db_path = history_path or DEFAULT_HISTORY_PATH
+    normalized_target = target if target.startswith(("http://", "https://")) else f"https://{target}"
+    snapshots = list_snapshots(db_path, normalized_target, limit=limit)
+
+    if not snapshots:
+        if json_out:
+            print(json.dumps({"target": normalized_target, "snapshots": 0, "timeline": []}))
+        else:
+            console.print(f"[yellow]no saved history[/yellow] for {normalized_target}")
+            console.print("  Run scans with [bold]--save-history[/bold] to start building a timeline.")
+        return
+
+    timeline = build_timeline(db_path, normalized_target, limit=limit)
+
+    if json_out:
+        print(json.dumps({"target": normalized_target, "snapshots": len(snapshots), "timeline": timeline}, indent=2))
+        return
+
+    console.print(f"[bold]{normalized_target}[/bold] — {len(snapshots)} saved snapshot(s)")
+    if not timeline:
+        console.print("  Only one snapshot saved so far; run another scan with --save-history to see changes.")
+        return
+
+    from datetime import datetime, timezone
+    for entry in timeline:
+        from_ts = datetime.fromtimestamp(entry["from"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        to_ts = datetime.fromtimestamp(entry["to"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        console.print(f"\n[dim]{from_ts}[/dim] → [dim]{to_ts}[/dim]")
+        diff = entry["diff"]
+        if not any(diff.values()):
+            console.print("  no changes")
+            continue
+        for change in diff.get("technology_changes", []):
+            if change["status"] == "added":
+                console.print(f"  [green]+ {change['name']}[/green] {change.get('version') or ''}")
+            elif change["status"] == "removed":
+                console.print(f"  [red]- {change['name']}[/red] {change.get('version') or ''}")
+            else:
+                console.print(f"  [yellow]~ {change['name']}[/yellow] {change.get('previous')} → {change.get('current')}")
+        for change in diff.get("cve_changes", []):
+            marker = "green" if change["status"] == "added" else "dim"
+            console.print(f"  [{marker}]CVE {change['status']}: {change['id']}[/{marker}]")
+        ports = diff.get("port_changes", {})
+        if ports.get("added"):
+            console.print(f"  [green]ports opened:[/green] {ports['added']}")
+        if ports.get("removed"):
+            console.print(f"  [red]ports closed:[/red] {ports['removed']}")
+        for cert in diff.get("certificate_expiry", []):
+            console.print(f"  [yellow]certificate expiring in {cert['days_remaining']}d[/yellow] ({cert['expires']})")
+
+
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
@@ -613,6 +677,9 @@ def main(
     cve: Optional[bool] = typer.Option(None, "--cve/--no-cve", help="Correlate detected versions with the local CVE dataset"),
     cve_min_severity: Optional[str] = typer.Option(None, "--cve-min-severity", help="Minimum CVE severity: low, medium, high, or critical"),
     fail_on_cve: bool = typer.Option(False, "--fail-on-cve", help="Exit with code 2 when CVEs are found"),
+    crawl: int = typer.Option(0, "--crawl", help="Fetch up to N additional same-origin pages to widen tech detection (0 disables)"),
+    save_history: bool = typer.Option(False, "--save-history", help="Append this scan's result to the local history DB for later 'inoue history' timelines"),
+    history_path: Optional[str] = typer.Option(None, "--history-path", help="SQLite history DB path (default ~/.cache/inoue/history.db)"),
 ):
     """
     Inoue — tech stack fingerprinting CLI
@@ -646,6 +713,46 @@ def main(
         cve_min_severity = config.get("cve_min_severity")
     if plugin_dir is None:
         plugin_dir = config.get("plugin_dir")
+
+    if targets and targets[0] == "history":
+        command_args = targets[1:]
+        if "--help" in command_args or "-h" in command_args:
+            console.print("Usage: python inoue.py history TARGET [--history-path FILE] [--limit N] [--json]")
+            raise typer.Exit()
+        history_target = None
+        history_db_path = None
+        history_limit = 20
+        history_json = False
+        index = 0
+        while index < len(command_args):
+            argument = command_args[index]
+            if argument == "--history-path" and index + 1 < len(command_args):
+                history_db_path = command_args[index + 1]
+                index += 2
+                continue
+            if argument == "--limit" and index + 1 < len(command_args):
+                try:
+                    history_limit = int(command_args[index + 1])
+                except ValueError:
+                    console.print(f"[red]invalid --limit value[/red] {command_args[index + 1]}")
+                    raise typer.Exit(2)
+                index += 2
+                continue
+            if argument == "--json":
+                history_json = True
+                index += 1
+                continue
+            if not argument.startswith("-") and history_target is None:
+                history_target = argument
+                index += 1
+                continue
+            console.print(f"[red]unknown history option[/red] {argument}")
+            raise typer.Exit(2)
+        if not history_target:
+            console.print("[red]missing target[/red]. Usage: python inoue.py history TARGET")
+            raise typer.Exit(2)
+        run_history_command(history_target, history_path=history_db_path, limit=history_limit, json_out=history_json)
+        raise typer.Exit()
 
     if targets and targets[0] == "update-cve":
         command_args = targets[1:]
@@ -789,6 +896,7 @@ def main(
                 cache_ttl=cache_ttl,
                 plugin_dirs=[plugin_dir] if plugin_dir else None,
                 cve_min_severity=cve_min_severity,
+                crawl_pages=crawl,
             )))
             for target in targets:
                 progress.remove_task(tasks_map[target])
@@ -807,6 +915,7 @@ def main(
                         plugin_dirs=[plugin_dir] if plugin_dir else None,
                         cve_min_severity=cve_min_severity,
                         progress=make_progress_callback(t, tasks_map[t]),
+                        crawl_pages=crawl,
                     ): t
                     for t in targets
                 }
@@ -821,6 +930,22 @@ def main(
                     except Exception as e:
                         console.print(f"  [red]error[/red] {target}")
                         console.print(f"    [dim]{type(e).__name__}: {e}[/dim]")
+
+    if save_history:
+        from core.history import DEFAULT_HISTORY_PATH, record_snapshot
+        from core.scanner import _serialize_scan_result
+        db_path = history_path or DEFAULT_HISTORY_PATH
+        saved_count = 0
+        for result in results:
+            if result.error:
+                continue
+            try:
+                record_snapshot(db_path, result.url, _serialize_scan_result(result))
+                saved_count += 1
+            except Exception as exc:
+                console.print(f"  [yellow]history save failed[/yellow] for {result.url}: {exc}")
+        if saved_count and not json_out:
+            console.print(f"  [green]saved[/green] {saved_count} snapshot(s) to {db_path}")
 
     if nuclei_out:
         try:

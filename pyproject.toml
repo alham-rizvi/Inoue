@@ -26,6 +26,9 @@ api = [
 mcp = [
 	"mcp>=1.0",
 ]
+hashing = [
+	"mmh3>=4.0",
+]
 
 [project.scripts]
 inoue = "inoue:app"

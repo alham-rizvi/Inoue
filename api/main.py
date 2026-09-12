@@ -35,6 +35,8 @@ class ScanRequest(BaseModel):
     follow_redirects: bool = True
     modules: Optional[list[str]] = None
     cve_min_severity: Optional[str] = None
+    crawl_pages: int = Field(0, ge=0, le=5, description="Fetch up to N additional same-origin pages to widen detection")
+    save_history: bool = Field(False, description="Append this scan to the local history DB for later timeline lookups")
 
 
 class BatchRequest(BaseModel):
@@ -45,6 +47,8 @@ class BatchRequest(BaseModel):
     cve_min_severity: Optional[str] = None
     workers: int = Field(5, ge=1, le=50)
     rate_limit: Optional[float] = Field(None, gt=0, le=100)
+    crawl_pages: int = Field(0, ge=0, le=5, description="Fetch up to N additional same-origin pages to widen detection")
+    save_history: bool = Field(False, description="Append each scanned target to the local history DB")
 
 
 def validate_public_target(target: str, allow_private: bool = False) -> None:
@@ -114,7 +118,14 @@ def create_app() -> Optional[FastAPI]:
             modules=payload.modules,
             cve_min_severity=payload.cve_min_severity,
             allow_private_targets=allow_private_targets,
+            crawl_pages=payload.crawl_pages,
         )
+        if payload.save_history and not result.error:
+            from core.history import DEFAULT_HISTORY_PATH, record_snapshot
+            from core.scanner import _serialize_scan_result
+            await asyncio.to_thread(
+                record_snapshot, DEFAULT_HISTORY_PATH, result.url, _serialize_scan_result(result)
+            )
         return serialize_result(result)
 
     async def scan_batch(payload: BatchRequest):
@@ -131,20 +142,38 @@ def create_app() -> Optional[FastAPI]:
             rate_limit=payload.rate_limit,
             cve_min_severity=payload.cve_min_severity,
             allow_private_targets=allow_private_targets,
+            crawl_pages=payload.crawl_pages,
         )
+        if payload.save_history:
+            from core.history import DEFAULT_HISTORY_PATH, record_snapshot
+            from core.scanner import _serialize_scan_result
+            for item in results:
+                if not item.error:
+                    await asyncio.to_thread(
+                        record_snapshot, DEFAULT_HISTORY_PATH, item.url, _serialize_scan_result(item)
+                    )
         return {
             "results": [serialize_result(item) for item in results]
         }
+
+    async def history(target: str, limit: int = 20):
+        from core.history import DEFAULT_HISTORY_PATH, build_timeline, list_snapshots
+        normalized = target if "://" in target else f"https://{target}"
+        snapshots = await asyncio.to_thread(list_snapshots, DEFAULT_HISTORY_PATH, normalized, limit)
+        timeline = await asyncio.to_thread(build_timeline, DEFAULT_HISTORY_PATH, normalized, limit)
+        return {"target": normalized, "snapshots": len(snapshots), "timeline": timeline}
 
     app.get("/health")(health)
     app.get("/signatures")(signatures)
     app.post("/scan")(scan_target)
     app.post("/scan/batch")(scan_batch)
+    app.get("/history/{target:path}")(history)
     for prefix in ("/api", "/api/v1"):
         app.get(f"{prefix}/health")(health)
         app.get(f"{prefix}/signatures")(signatures)
         app.post(f"{prefix}/scan")(scan_target)
         app.post(f"{prefix}/scan/batch")(scan_batch)
+        app.get(f"{prefix}/history/{{target:path}}")(history)
 
     return app
 

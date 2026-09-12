@@ -772,6 +772,152 @@ def _enumerate_directories(url: str, headers: dict, body: str, timeout: int = 2)
     return sorted(seen.values(), key=lambda item: (item["source"] != "active", item["path"]))
 
 
+def _get_favicon(base_url: str, body: str, timeout: int = 5) -> Optional[dict]:
+    """Fetch the page's favicon and hash it against the known catalog.
+
+    Runs as its own bounded, best-effort request (256KB cap, short timeout)
+    so it never meaningfully slows a scan down; any failure just means no
+    favicon signal, not a scan error.
+    """
+    from core.favicon import compute_favicon_hash, extract_favicon_href, match_favicon_hash
+
+    favicon_url = extract_favicon_href(body, base_url)
+    try:
+        with httpx.Client(timeout=max(1, timeout), verify=False, follow_redirects=True) as client:
+            response = client.get(favicon_url, headers={"User-Agent": "Mozilla/5.0"})
+        if response.status_code != 200 or not response.content:
+            return None
+        content = response.content[:262144]
+        hashes = compute_favicon_hash(content)
+        if not hashes:
+            return None
+        payload: dict = {"url": favicon_url, "size": len(content), **hashes}
+        match = match_favicon_hash(hashes)
+        if match:
+            payload["matched_technology"], payload["matched_category"] = match
+        return payload
+    except Exception:
+        return None
+
+
+def _extract_crawl_candidates(body: str, base_url: str, limit: int = 5) -> list[str]:
+    """Pick up to `limit` same-origin page links from the fetched HTML."""
+    if not body or limit <= 0:
+        return []
+    from urllib.parse import urlsplit
+
+    base_parts = urlsplit(base_url)
+    base_normalized = base_url.rstrip("/")
+    hrefs: list[str] = []
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(body, "html.parser")
+        hrefs = [a.get("href") for a in soup.find_all("a", href=True)]
+    except Exception:
+        hrefs = re.findall(r'href=["\']([^"\']+)["\']', body, re.IGNORECASE)
+
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for href in hrefs:
+        if not href or href.startswith(("#", "mailto:", "tel:", "javascript:")):
+            continue
+        absolute = urljoin(base_url, href)
+        parts = urlsplit(absolute)
+        if parts.scheme not in ("http", "https") or parts.netloc != base_parts.netloc:
+            continue
+        clean = parts._replace(fragment="").geturl()
+        if clean in seen or clean.rstrip("/") == base_normalized:
+            continue
+        seen.add(clean)
+        candidates.append(clean)
+        if len(candidates) >= limit:
+            break
+    return candidates
+
+
+def _crawl_additional_pages(
+    base_url: str,
+    body: str,
+    headers_to_send: dict,
+    timeout: int,
+    max_pages: int,
+) -> tuple[list[Detection], list[str]]:
+    """Fetch up to `max_pages` extra same-origin pages and fingerprint each.
+
+    Widens detection for stacks that only reveal themselves on specific
+    pages (e.g. a checkout page's payment processor, a docs page's static
+    site generator markers). Bounded, same-origin only, read-only GETs.
+    """
+    if max_pages <= 0:
+        return [], []
+    candidates = _extract_crawl_candidates(body, base_url, limit=max_pages)
+    if not candidates:
+        return [], []
+
+    def fetch(page_url: str):
+        try:
+            with httpx.Client(timeout=max(1, timeout), verify=False, follow_redirects=True) as client:
+                response = client.get(page_url, headers=headers_to_send)
+            return page_url, response
+        except Exception:
+            return page_url, None
+
+    new_detections: list[Detection] = []
+    scanned: list[str] = []
+    with ThreadPoolExecutor(max_workers=min(4, len(candidates))) as executor:
+        for page_url, response in executor.map(fetch, candidates):
+            if response is None or response.status_code >= 400:
+                continue
+            scanned.append(page_url)
+            page_cookies = {key: value for key, value in response.cookies.items()}
+            page_detections = run_fingerprints(
+                dict(response.headers), page_cookies, response.text, url=page_url,
+            )
+            for detection in page_detections:
+                detection.evidence = f"[{page_url}] {detection.evidence}"
+                new_detections.append(detection)
+
+    return new_detections, scanned
+
+
+def _merge_crawl_and_favicon(
+    result: "ScanResult",
+    favicon_payload: Optional[dict],
+    crawl_detections: list[Detection],
+    crawl_pages: list[str],
+) -> None:
+    """Fold favicon-hash and crawl-derived detections into `result` in place."""
+    existing_names = {tech.name for tech in result.technologies}
+
+    if favicon_payload:
+        result.extra_intel["favicon"] = favicon_payload
+        matched_name = favicon_payload.get("matched_technology")
+        if matched_name and matched_name not in existing_names:
+            result.technologies.append(Detection(
+                name=matched_name,
+                category=favicon_payload.get("matched_category", "Other"),
+                confidence="high",
+                confidence_score=90.0,
+                evidence=f"Favicon hash match ({favicon_payload.get('url')})",
+            ))
+            existing_names.add(matched_name)
+
+    if crawl_pages:
+        result.enriched["crawl"] = {"pages_scanned": crawl_pages}
+        for detection in crawl_detections:
+            if detection.name in existing_names:
+                continue
+            # Secondary pages are an auxiliary signal, not the primary
+            # fetch: only fold in detections we're reasonably sure about.
+            # A flood of low-confidence path-only matches (e.g. an admin
+            # panel signature matching on a generic "/login" path) would
+            # otherwise make crawl mode net-negative for accuracy.
+            if detection.confidence == "low":
+                continue
+            result.technologies.append(detection)
+            existing_names.add(detection.name)
+
+
 def _extract_html_intel(body: str) -> dict:
     intel = {}
     try:
@@ -940,6 +1086,7 @@ def serialize_scan_result(result: ScanResult) -> dict:
         "recon": result.enriched.get("recon", []) if result.enriched else [],
         "service_hints": result.enriched.get("service_hints", []) if result.enriched else [],
         "plugins": result.enriched.get("plugins", {}) if result.enriched else {},
+        "crawl": result.enriched.get("crawl", {}) if result.enriched else {},
         "notes": result.notes,
         "error": result.error,
         "cache_hit": result.cache_hit,
@@ -983,6 +1130,7 @@ def _scan_cache_module(
     plugin_dirs: Optional[list[str]],
     cve_min_severity: Optional[str],
     api_key: Optional[str],
+    crawl_pages: int = 0,
 ) -> str:
     options = {
         "timeout": timeout,
@@ -993,6 +1141,7 @@ def _scan_cache_module(
         "plugin_dirs": sorted(str(path) for path in (plugin_dirs or [])),
         "cve_min_severity": cve_min_severity or "",
         "api_key": bool(api_key),
+        "crawl_pages": crawl_pages,
     }
     return "scan:" + json.dumps(options, sort_keys=True, separators=(",", ":"))
 
@@ -1103,6 +1252,7 @@ async def _async_scan_target(
     api_key: Optional[str] = None,
     progress: Optional[Callable[[str], None]] = None,
     allow_private_targets: bool = True,
+    crawl_pages: int = 0,
 ) -> ScanResult:
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
@@ -1155,14 +1305,15 @@ async def _async_scan_target(
     result.headers = dict(response.headers)
     result.server = _header_value(result.headers, "server")
     cookies = {key: value for key, value in response.cookies.items()}
-    result.technologies = run_fingerprints(
-        result.headers,
-        cookies,
-        response.text,
-        url=result.final_url,
-        progress=progress,
-        sources={"headers"} if plan.get("headers") and not plan.get("tech") else None,
-    )
+    if plan.get("tech") or plan.get("smart") or plan.get("headers"):
+        result.technologies = run_fingerprints(
+            result.headers,
+            cookies,
+            response.text,
+            url=result.final_url,
+            progress=progress,
+            sources={"headers"} if plan.get("headers") and not plan.get("tech") else None,
+        )
     result.notes = detect_contradictions(result.technologies)
     if "cve" in (modules or []) or "cves" in (modules or []):
         _correlate_detection_cves(result.technologies, min_severity=cve_min_severity)
@@ -1198,6 +1349,12 @@ async def _async_scan_target(
             "directories": _enumerate_directories(result.final_url, result.headers, response.text, timeout=max(1, min(2, timeout // 4))),
             "intel": _fetch_public_intel(hostname, response.text),
         }))
+    if plan.get("tech") and hostname:
+        tasks.append(("favicon", lambda: _get_favicon(result.final_url, response.text, timeout=max(1, min(3, timeout // 4)))))
+    if crawl_pages > 0 and hostname:
+        tasks.append(("crawl", lambda: _crawl_additional_pages(
+            result.final_url, response.text, headers_to_send, max(1, min(5, timeout)), crawl_pages,
+        )))
     if tasks:
         task_results = await asyncio.gather(
             *(asyncio.to_thread(task) for _, task in tasks),
@@ -1217,6 +1374,8 @@ async def _async_scan_target(
     result.directories = extra_payload.get("directories") or []
     result.extra_intel = extra_payload.get("intel") or {}
     result.extra_intel.setdefault("directories", result.directories)
+    crawl_detections, crawl_pages_scanned = recon_results.get("crawl") or ([], [])
+    _merge_crawl_and_favicon(result, recon_results.get("favicon"), crawl_detections, crawl_pages_scanned)
     company_intel = _collect_company_intel(hostname, response.text, result.headers)
     if company_intel:
         result.extra_intel.setdefault("company", {})
@@ -1249,6 +1408,7 @@ async def scan_many(
     progress: Optional[Callable[[str], None]] = None,
     cve_min_severity: Optional[str] = None,
     allow_private_targets: bool = True,
+    crawl_pages: int = 0,
 ) -> list[ScanResult]:
     """Scan multiple targets concurrently using one shared async HTTP client."""
     if not targets:
@@ -1280,7 +1440,7 @@ async def scan_many(
             if cache:
                 cache_module = _scan_cache_module(
                     timeout, follow_redirects, dns, ssl_check, modules,
-                    plugin_dirs, cve_min_severity, api_key,
+                    plugin_dirs, cve_min_severity, api_key, crawl_pages,
                 )
                 cached = cache.get(target, cache_module)
                 if cached:
@@ -1293,7 +1453,7 @@ async def scan_many(
             result = await _async_scan_target(
                 client, target, timeout, follow_redirects, modules, plugin_dirs,
                 cve_min_severity, dns, ssl_check, api_key, progress,
-                allow_private_targets,
+                allow_private_targets, crawl_pages,
             )
             if cache and not result.error:
                 cache.set(target, cache_module, _serialize_scan_result(result))
@@ -1527,8 +1687,6 @@ def run_fingerprints(
             if confidence_score >= 70:
                 confidence = "high"
             elif confidence_score >= 35:
-                confidence = "high"
-            elif confidence_score >= 20:
                 confidence = "medium"
             else:
                 confidence = "low"
@@ -1593,6 +1751,7 @@ def scan(
     progress: Optional[Callable[[str], None]] = None,
     cve_min_severity: Optional[str] = None,
     allow_private_targets: bool = True,
+    crawl_pages: int = 0,
 ) -> ScanResult:
     def report(message: str):
         if progress:
@@ -1636,14 +1795,17 @@ def scan(
         report(f"response received {result.status_code}")
         parsed = urlparse(result.final_url)
         hostname = parsed.hostname or hostname
-        result.technologies = run_fingerprints(
-            resp_headers,
-            cookies,
-            body,
-            url=result.final_url,
-            progress=progress,
-            sources={"headers"} if plan.get("headers") and not plan.get("tech") else None,
-        )
+        if plan.get("tech") or plan.get("smart") or plan.get("headers"):
+            result.technologies = run_fingerprints(
+                resp_headers,
+                cookies,
+                body,
+                url=result.final_url,
+                progress=progress,
+                sources={"headers"} if plan.get("headers") and not plan.get("tech") else None,
+            )
+        else:
+            report("skipping fingerprint matching (not requested)")
         result.notes = detect_contradictions(result.technologies)
         if "cve" in (modules or []) or "cves" in (modules or []):
             _correlate_detection_cves(result.technologies, min_severity=cve_min_severity)
@@ -1668,14 +1830,17 @@ def scan(
             report(f"response received {result.status_code}")
             parsed = urlparse(result.final_url)
             hostname = parsed.hostname or hostname
-            result.technologies = run_fingerprints(
-                resp_headers,
-                cookies,
-                body,
-                url=result.final_url,
-                progress=progress,
-                sources={"headers"} if plan.get("headers") and not plan.get("tech") else None,
-            )
+            if plan.get("tech") or plan.get("smart") or plan.get("headers"):
+                result.technologies = run_fingerprints(
+                    resp_headers,
+                    cookies,
+                    body,
+                    url=result.final_url,
+                    progress=progress,
+                    sources={"headers"} if plan.get("headers") and not plan.get("tech") else None,
+                )
+            else:
+                report("skipping fingerprint matching (not requested)")
             result.notes = detect_contradictions(result.technologies)
             if "cve" in (modules or []) or "cves" in (modules or []):
                 _correlate_detection_cves(result.technologies, min_severity=cve_min_severity)
@@ -1720,6 +1885,12 @@ def scan(
             "directories": _enumerate_directories(result.final_url, result.headers, body, timeout=max(1, min(2, timeout // 4))),
             "intel": _fetch_public_intel(hostname, body),
         })))
+    if plan.get("tech") and hostname:
+        tasks.append(("favicon", lambda: _get_favicon(result.final_url, body, timeout=max(1, min(3, timeout // 4)))))
+    if crawl_pages > 0 and hostname:
+        tasks.append(("crawl", lambda: _crawl_additional_pages(
+            result.final_url, body, headers_to_send, max(1, min(5, timeout)), crawl_pages,
+        )))
 
     if progress and tasks:
         report(f"enqueueing {len(tasks)} recon tasks")
@@ -1762,6 +1933,9 @@ def scan(
         result.directories = extra_payload.get("directories") or []
         result.extra_intel = extra_payload.get("intel") or {}
         result.extra_intel.setdefault("directories", result.directories)
+
+    crawl_detections, crawl_pages_scanned = recon_results.get("crawl") or ([], [])
+    _merge_crawl_and_favicon(result, recon_results.get("favicon"), crawl_detections, crawl_pages_scanned)
 
     if hostname:
         external = _enrich_with_external_services(hostname, [tech.name for tech in result.technologies], api_key)
