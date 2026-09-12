@@ -37,9 +37,13 @@ class ScanRequest(BaseModel):
     cve_min_severity: Optional[str] = None
     crawl_pages: int = Field(0, ge=0, le=5, description="Fetch up to N additional same-origin pages to widen detection")
     save_history: bool = Field(False, description="Append this scan to the local history DB for later timeline lookups")
-    scope_path: Optional[str] = None
-    max_requests: Optional[int] = Field(None, ge=1)
-    waf_probe: bool = False
+    active_subdomains: bool = Field(False, description="Run subfinder for active subdomain enumeration (requires subfinder on PATH)")
+    active_ports: bool = Field(False, description="Run naabu+nmap for real port/service scanning (requires naabu and/or nmap on PATH)")
+    nuclei_scan: bool = Field(False, description="Auto-run nuclei vulnerability templates (requires nuclei on PATH)")
+    nuclei_severity: Optional[str] = Field(None, description="Filter nuclei findings to one or more severities, e.g. 'high,critical'")
+    harvest_urls: bool = Field(False, description="Collect historical + live URLs via gau, waybackurls, and katana")
+    screenshot: bool = Field(False, description="Capture a screenshot via gowitness (requires gowitness + Chrome/Chromium)")
+    screenshot_dir: str = Field("/tmp/inoue-screenshots", description="Directory to write gowitness screenshots to")
 
 
 class BatchRequest(BaseModel):
@@ -52,9 +56,13 @@ class BatchRequest(BaseModel):
     rate_limit: Optional[float] = Field(None, gt=0, le=100)
     crawl_pages: int = Field(0, ge=0, le=5, description="Fetch up to N additional same-origin pages to widen detection")
     save_history: bool = Field(False, description="Append each scanned target to the local history DB")
-    scope_path: Optional[str] = None
-    max_requests: Optional[int] = Field(None, ge=1)
-    waf_probe: bool = False
+    active_subdomains: bool = Field(False, description="Run subfinder for active subdomain enumeration per target (requires subfinder on PATH)")
+    active_ports: bool = Field(False, description="Run naabu+nmap for real port/service scanning per target (requires naabu and/or nmap on PATH)")
+    nuclei_scan: bool = Field(False, description="Auto-run nuclei vulnerability templates per target (requires nuclei on PATH)")
+    nuclei_severity: Optional[str] = Field(None, description="Filter nuclei findings to one or more severities, e.g. 'high,critical'")
+    harvest_urls: bool = Field(False, description="Collect historical + live URLs via gau, waybackurls, and katana per target")
+    screenshot: bool = Field(False, description="Capture a screenshot per target via gowitness (requires gowitness + Chrome/Chromium)")
+    screenshot_dir: str = Field("/tmp/inoue-screenshots", description="Directory to write gowitness screenshots to")
 
 
 def validate_public_target(target: str, allow_private: bool = False) -> None:
@@ -116,24 +124,22 @@ def create_app() -> Optional[FastAPI]:
 
     async def scan_target(payload: ScanRequest):
         validate_public_target(payload.target, allow_private_targets)
-        scan_kwargs = {
-            "timeout": payload.timeout,
-            "follow_redirects": payload.follow_redirects,
-            "modules": payload.modules,
-            "cve_min_severity": payload.cve_min_severity,
-            "allow_private_targets": allow_private_targets,
-            "crawl_pages": payload.crawl_pages,
-        }
-        if payload.scope_path:
-            scan_kwargs["scope_path"] = payload.scope_path
-        if payload.max_requests:
-            scan_kwargs["max_requests"] = payload.max_requests
-        if payload.waf_probe:
-            scan_kwargs["waf_probe"] = True
         result = await asyncio.to_thread(
             scan,
             payload.target,
-            **scan_kwargs,
+            timeout=payload.timeout,
+            follow_redirects=payload.follow_redirects,
+            modules=payload.modules,
+            cve_min_severity=payload.cve_min_severity,
+            allow_private_targets=allow_private_targets,
+            crawl_pages=payload.crawl_pages,
+            active_subdomains=payload.active_subdomains,
+            active_ports=payload.active_ports,
+            nuclei_scan=payload.nuclei_scan,
+            nuclei_severity=payload.nuclei_severity,
+            harvest_urls=payload.harvest_urls,
+            screenshot=payload.screenshot,
+            screenshot_dir=payload.screenshot_dir,
         )
         if payload.save_history and not result.error:
             from core.history import DEFAULT_HISTORY_PATH, record_snapshot
@@ -148,25 +154,23 @@ def create_app() -> Optional[FastAPI]:
             raise HTTPException(status_code=400, detail=f"Batch size exceeds {max_batch_size}")
         for target in payload.targets:
             validate_public_target(target, allow_private_targets)
-        batch_kwargs = {
-            "timeout": payload.timeout,
-            "follow_redirects": payload.follow_redirects,
-            "modules": payload.modules,
-            "workers": payload.workers,
-            "rate_limit": payload.rate_limit,
-            "cve_min_severity": payload.cve_min_severity,
-            "allow_private_targets": allow_private_targets,
-            "crawl_pages": payload.crawl_pages,
-        }
-        if payload.scope_path:
-            batch_kwargs["scope_path"] = payload.scope_path
-        if payload.max_requests:
-            batch_kwargs["max_requests"] = payload.max_requests
-        if payload.waf_probe:
-            batch_kwargs["waf_probe"] = True
         results = await scan_many(
             payload.targets,
-            **batch_kwargs,
+            timeout=payload.timeout,
+            follow_redirects=payload.follow_redirects,
+            modules=payload.modules,
+            workers=payload.workers,
+            rate_limit=payload.rate_limit,
+            cve_min_severity=payload.cve_min_severity,
+            allow_private_targets=allow_private_targets,
+            crawl_pages=payload.crawl_pages,
+            active_subdomains=payload.active_subdomains,
+            active_ports=payload.active_ports,
+            nuclei_scan=payload.nuclei_scan,
+            nuclei_severity=payload.nuclei_severity,
+            harvest_urls=payload.harvest_urls,
+            screenshot=payload.screenshot,
+            screenshot_dir=payload.screenshot_dir,
         )
         if payload.save_history:
             from core.history import DEFAULT_HISTORY_PATH, record_snapshot
