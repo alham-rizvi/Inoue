@@ -92,6 +92,8 @@ def emit_cli_error(message: str, *, detail: Optional[str] = None, hint: Optional
 
 
 def render_result(result: ScanResult, verbose: bool = False, evidence: bool = False, modules: Optional[list[str]] = None):
+    selected_modules = {item.lower() for item in (modules or [])}
+    show_module = lambda name: verbose or name in selected_modules or "all" in selected_modules or "full-recon" in selected_modules
     status_color = "green" if result.status_code < 300 else "yellow" if result.status_code < 400 else "red"
 
     console.print(f"  [dim]url[/dim]     {result.final_url}")
@@ -174,13 +176,13 @@ def render_result(result: ScanResult, verbose: bool = False, evidence: bool = Fa
                     console.print(f"  [cyan]{key}[/cyan] {value}")
         console.print()
 
-    if result.mail_records and verbose:
+    if result.mail_records and show_module("mail"):
         console.print("  [dim]── mail records ─────────────────────[/dim]")
         for item in result.mail_records:
             console.print(f"  [cyan]MX[/cyan] {item}")
         console.print()
 
-    if result.subdomains:
+    if result.subdomains and show_module("subdomains"):
         console.print("  [dim]── subdomains ───────────────────────[/dim]")
         for item in result.subdomains[:12]:
             console.print(f"  [cyan]sub[/cyan] {item}")
@@ -188,13 +190,32 @@ def render_result(result: ScanResult, verbose: bool = False, evidence: bool = Fa
             console.print(f"  [dim]+{len(result.subdomains) - 12} more[/dim]")
         console.print()
 
-    if result.directories:
+    if result.directories and show_module("extra"):
         console.print("  [dim]── directories ───────────────────────[/dim]")
         for item in result.directories[:10]:
             console.print(f"  [cyan]{item['source']}[/cyan] {item['path']} -> {item['status_code']}")
         console.print()
 
-    if result.extra_intel and verbose:
+    if result.open_ports and show_module("ports"):
+        console.print("  [dim]── open ports ────────────────────────[/dim]")
+        for item in result.open_ports:
+            service = item.get("service", "unknown") if isinstance(item, dict) else "unknown"
+            port = item.get("port", "?") if isinstance(item, dict) else item
+            console.print(f"  [cyan]{port}[/cyan] {service}")
+        console.print()
+
+    if result.whois_info and show_module("whois"):
+        console.print("  [dim]── whois ─────────────────────────────[/dim]")
+        summary = result.whois_summary or {}
+        for key in ["domain", "company", "registrant", "country", "registrar", "creation_date", "expiration_date"]:
+            value = summary.get(key)
+            if value:
+                console.print(f"  [cyan]{key}[/cyan] {value}")
+        if summary.get("nameservers"):
+            console.print(f"  [cyan]nameservers[/cyan] {', '.join(summary['nameservers'][:6])}")
+        console.print()
+
+    if result.extra_intel and show_module("extra"):
         console.print("  [dim]── public intel ─────────────────────[/dim]")
         for key, value in result.extra_intel.items():
             if isinstance(value, list):
@@ -203,7 +224,7 @@ def render_result(result: ScanResult, verbose: bool = False, evidence: bool = Fa
                 console.print(f"  [cyan]{key}[/cyan] {value}")
         console.print()
 
-    if result.ssl_info and not result.ssl_info.get("error") and verbose:
+    if result.ssl_info and not result.ssl_info.get("error") and show_module("ssl"):
         ssl = result.ssl_info
         subject = ssl.get("subject", {})
         issuer = ssl.get("issuer", {})
@@ -219,14 +240,14 @@ def render_result(result: ScanResult, verbose: bool = False, evidence: bool = Fa
             console.print(f"  [dim]san[/dim]       {', '.join(sans)}" + (" ..." if len(ssl["san"]) > 6 else ""))
         console.print()
 
-    if result.dns_records and verbose:
+    if result.dns_records and show_module("dns"):
         console.print("  [dim]── dns ───────────────────────────────[/dim]")
         for rtype, values in result.dns_records.items():
             for v in values[:5]:
                 console.print(f"  [cyan]{rtype:<8}[/cyan] {v}")
         console.print()
 
-    if verbose:
+    if show_module("headers"):
         sec_headers = [
             "Strict-Transport-Security", "Content-Security-Policy", "X-Frame-Options",
             "X-XSS-Protection", "X-Content-Type-Options", "Referrer-Policy",
@@ -241,7 +262,7 @@ def render_result(result: ScanResult, verbose: bool = False, evidence: bool = Fa
                 console.print(f"  [red]-[/red] [dim]{h}[/dim]")
         console.print()
 
-    if verbose:
+    if show_module("headers"):
         console.print("  [dim]── response headers ────────────────────[/dim]")
         for k, v in result.headers.items():
             console.print(f"  [dim]{k}:[/dim] {v[:100]}")
@@ -314,6 +335,7 @@ def result_to_dict(result: ScanResult) -> dict:
         "status_code": result.status_code,
         "response_time_ms": result.response_time_ms,
         "server": result.server,
+        "headers": result.headers,
         "technologies": [
             {
                 "name": technology.name,
@@ -329,9 +351,17 @@ def result_to_dict(result: ScanResult) -> dict:
         "dns": result.dns_records,
         "ssl": result.ssl_info,
         "tls_fingerprint": result.tls_fingerprint,
+        "whois": result.whois_info,
+        "whois_summary": result.whois_summary,
+        "subdomains": result.subdomains,
+        "mail_records": result.mail_records,
+        "open_ports": result.open_ports,
+        "directories": result.directories,
+        "extra_intel": result.extra_intel,
         "recon": result.enriched.get("recon", []) if result.enriched else [],
         "service_hints": result.enriched.get("service_hints", []) if result.enriched else [],
         "plugins": result.enriched.get("plugins", {}) if result.enriched else {},
+        "enriched": result.enriched,
         "notes": result.notes,
         "error": result.error,
         "cache_hit": getattr(result, "cache_hit", False),
@@ -341,9 +371,35 @@ def result_to_dict(result: ScanResult) -> dict:
 def render_html_report(results: list[ScanResult]) -> str:
     rows = []
     cves = []
+    recon_sections = []
     for result in results:
         data = result_to_dict(result)
         technologies = data["technologies"]
+        recon_lines = [
+            f"<strong>URL:</strong> {html.escape(data['final_url'])}",
+            f"<strong>Status:</strong> {data['status_code']} ({data['response_time_ms']} ms)",
+            f"<strong>IP:</strong> {html.escape(data['ip'] or 'unknown')}",
+        ]
+        if data["headers"]:
+            recon_lines.append("<strong>Headers:</strong><br>" + "<br>".join(
+                f"{html.escape(str(key))}: {html.escape(str(value))}" for key, value in data["headers"].items()
+            ))
+        for label, values in [
+            ("DNS", data["dns"]),
+            ("Subdomains", data["subdomains"]),
+            ("Mail records", data["mail_records"]),
+            ("Open ports", data["open_ports"]),
+            ("Directories", data["directories"]),
+        ]:
+            if values:
+                recon_lines.append(f"<strong>{label}:</strong> {html.escape(str(values))}")
+        if data["whois_summary"]:
+            recon_lines.append(f"<strong>WHOIS:</strong> {html.escape(str(data['whois_summary']))}")
+        if data["extra_intel"]:
+            recon_lines.append(f"<strong>Public intel:</strong> {html.escape(str(data['extra_intel']))}")
+        recon_sections.append("<section><h3>{}</h3><p>{}</p></section>".format(
+            html.escape(data["final_url"]), "<br>".join(recon_lines)
+        ))
         if not technologies:
             rows.append(
                 "<tr><td>{}</td><td colspan=\"4\">No technologies detected</td></tr>".format(
@@ -375,8 +431,8 @@ def render_html_report(results: list[ScanResult]) -> str:
 <style>body{{font:15px sans-serif;margin:2rem;color:#202124}}table{{border-collapse:collapse;width:100%}}th,td{{border:1px solid #ccc;padding:.5rem;text-align:left}}th{{background:#f2f2f2}}h1{{margin-bottom:.25rem}}</style>
 </head><body><h1>Inoue reconnaissance report</h1>
 <table><thead><tr><th>Target</th><th>Technology</th><th>Category</th><th>Version</th><th>Confidence</th></tr></thead>
-<tbody>{rows}</tbody></table><h2>Known CVEs</h2>{cve_section}</body></html>
-""".format(rows="".join(rows), cve_section=cve_section)
+<tbody>{rows}</tbody></table><h2>Recon details</h2>{recon_sections}<h2>Known CVEs</h2>{cve_section}</body></html>
+""".format(rows="".join(rows), recon_sections="".join(recon_sections), cve_section=cve_section)
 
 
 def render_markdown_report(results: list[ScanResult]) -> str:
@@ -396,6 +452,29 @@ def render_markdown_report(results: list[ScanResult]) -> str:
             lines.append(
                 f"| {result.final_url} | {technology.name} | {technology.category} | {technology.version or 'unknown'} | {technology.confidence} | {evidence} |"
             )
+        lines.extend([
+            "",
+            f"## Recon details: {result.final_url}",
+            "",
+            f"- Status: {result.status_code} ({result.response_time_ms} ms)",
+            f"- IP: {result.ip or 'unknown'}",
+        ])
+        if result.headers:
+            lines.append(f"- Headers: {result.headers}")
+        if result.dns_records:
+            lines.append(f"- DNS: {result.dns_records}")
+        if result.whois_summary:
+            lines.append(f"- WHOIS: {result.whois_summary}")
+        if result.subdomains:
+            lines.append(f"- Subdomains: {result.subdomains}")
+        if result.mail_records:
+            lines.append(f"- Mail records: {result.mail_records}")
+        if result.open_ports:
+            lines.append(f"- Open ports: {result.open_ports}")
+        if result.directories:
+            lines.append(f"- Directories: {result.directories}")
+        if result.extra_intel:
+            lines.append(f"- Public intel: {result.extra_intel}")
 
     if not results:
         lines.append("No results.")

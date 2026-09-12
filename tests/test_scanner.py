@@ -33,7 +33,7 @@ from core.cve import correlate_cves, refresh_cve_dataset
 from core.config import load_config
 from core.plugins import run_plugins
 from fingerprints.signatures import SIGNATURES
-from inoue import app, format_update_report, load_targets, render_html_report, result_exit_code, write_nuclei_export
+from inoue import app, format_update_report, load_targets, render_html_report, result_exit_code, result_to_dict, write_nuclei_export
 
 
 class ScannerSummaryTests(unittest.TestCase):
@@ -68,6 +68,18 @@ class ScannerSummaryTests(unittest.TestCase):
         self.assertIn("PHP", names)
         self.assertIn("WordPress", names)
         self.assertEqual(next(d.version for d in detections if d.name == "Nginx"), "1.26.1")
+
+    def test_run_fingerprints_can_limit_detection_to_headers(self):
+        detections = run_fingerprints(
+            {"Server": "nginx/1.26.1"},
+            {},
+            '<meta name="generator" content="WordPress 6.4.2">',
+            sources={"headers"},
+        )
+
+        names = {item.name for item in detections}
+        self.assertIn("Nginx", names)
+        self.assertNotIn("WordPress", names)
 
     def test_normalize_version_rejects_timestamp_like_strings(self):
         for value in [
@@ -507,6 +519,48 @@ class ScannerSummaryTests(unittest.TestCase):
 
         self.assertEqual(result.exit_code, 0)
         self.assertEqual(json.loads(result.stdout)[0]["url"], "https://example.com")
+
+    @patch("inoue.scan")
+    def test_cli_headers_flag_renders_headers_without_verbose(self, mock_scan):
+        mock_scan.return_value = ScanResult(
+            url="https://example.com",
+            final_url="https://example.com",
+            status_code=200,
+            response_time_ms=1,
+            headers={"strict-transport-security": "max-age=31536000"},
+        )
+
+        result = CliRunner().invoke(app, ["--headers", "--no-banner", "example.com"], catch_exceptions=False)
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("security headers", result.stdout)
+        self.assertIn("Strict-Transport-Security", result.stdout)
+
+    def test_result_to_dict_preserves_all_recon_fields(self):
+        result = ScanResult(
+            url="https://example.com",
+            final_url="https://example.com/",
+            status_code=200,
+            response_time_ms=1,
+            headers={"server": "nginx"},
+            whois_info={"domain_name": "example.com"},
+            whois_summary={"domain": "example.com"},
+            subdomains=["api.example.com"],
+            mail_records=["mail.example.com"],
+            open_ports=[{"port": 443, "service": "https"}],
+            directories=[{"path": "/admin", "status_code": 403, "source": "active"}],
+            extra_intel={"title": "Example"},
+        )
+
+        payload = result_to_dict(result)
+
+        self.assertEqual(payload["headers"], result.headers)
+        self.assertEqual(payload["whois"], result.whois_info)
+        self.assertEqual(payload["subdomains"], result.subdomains)
+        self.assertEqual(payload["mail_records"], result.mail_records)
+        self.assertEqual(payload["open_ports"], result.open_ports)
+        self.assertEqual(payload["directories"], result.directories)
+        self.assertEqual(payload["extra_intel"], result.extra_intel)
 
     def test_summarize_whois_details_includes_company_and_contacts(self):
         summary = summarize_whois_details({

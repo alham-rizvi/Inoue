@@ -631,20 +631,25 @@ def _enumerate_directories(url: str, headers: dict, body: str, timeout: int = 2)
     ]
     matches = []
 
-    for path in common_paths:
+    def probe(path: str) -> Optional[dict]:
         candidate_url = base + path
         try:
             with httpx.Client(timeout=max(1, timeout), verify=False) as client:
                 response = client.get(candidate_url, headers={"User-Agent": headers.get("User-Agent", "Mozilla/5.0")}, follow_redirects=True)
             if response.status_code < 500:
-                matches.append({
+                return {
                     "path": path,
                     "url": str(response.url),
                     "status_code": response.status_code,
                     "source": "active",
-                })
+                }
         except Exception:
-            continue
+            return None
+
+    with ThreadPoolExecutor(max_workers=min(8, len(common_paths))) as executor:
+        for match in executor.map(probe, common_paths):
+            if match:
+                matches.append(match)
 
     if body:
         for href in re.findall(r'href=["\']([^"\']+)["\']', body, re.IGNORECASE):
@@ -727,15 +732,16 @@ def _fetch_public_intel(hostname: str, body: str = "") -> dict:
 
 
 def _scan_common_ports(hostname: str, timeout: int = 1) -> list[dict]:
-    open_ports = []
     ports = [21, 22, 25, 53, 80, 110, 143, 443, 445, 3306, 5432, 6379, 8080, 8443, 8888, 9000, 5900, 2375, 2376]
-    for port in ports:
+    def probe(port: int) -> Optional[dict]:
         try:
             with socket.create_connection((hostname, port), timeout=timeout):
-                open_ports.append({"port": port, "service": "unknown"})
+                return {"port": port, "service": "unknown"}
         except Exception:
-            continue
-    return open_ports
+            return None
+
+    with ThreadPoolExecutor(max_workers=len(ports)) as executor:
+        return [result for result in executor.map(probe, ports) if result]
 
 
 def _collect_company_intel(hostname: str, body: str = "", headers: Optional[dict] = None) -> dict:
@@ -1005,6 +1011,7 @@ async def _async_scan_target(
     }
     parsed = urlparse(url)
     result = ScanResult(url=url, final_url=url, status_code=0, response_time_ms=0)
+    plan = build_recon_plan(modules)
     started = time.perf_counter()
 
     try:
@@ -1049,6 +1056,7 @@ async def _async_scan_target(
         response.text,
         url=result.final_url,
         progress=progress,
+        sources={"headers"} if plan.get("headers") and not plan.get("tech") else None,
     )
     result.notes = detect_contradictions(result.technologies)
     if "cve" in (modules or []) or "cves" in (modules or []):
@@ -1063,6 +1071,8 @@ async def _async_scan_target(
             item for item in build_recon_summary(result) if item.get("service_hints")
         ],
     }
+    if plan.get("headers"):
+        result.enriched["headers"] = dict(result.headers)
 
     recon_results = {}
     tasks = []
@@ -1298,8 +1308,9 @@ def _collect_candidate_signatures(
         for token, tech_name in SMART_TOKENS.items():
             if token in lower_src:
                 candidates.add(tech_name)
+    html_candidates: set[str] = set()
     for token in _tokenize_text(body):
-        candidates.update(SIGNATURES_BY_HTML_TOKEN.get(token, []))
+        html_candidates.update(SIGNATURES_BY_HTML_TOKEN.get(token, []))
         for smart_token, tech_name in SMART_TOKENS.items():
             if smart_token in token:
                 candidates.add(tech_name)
@@ -1309,10 +1320,24 @@ def _collect_candidate_signatures(
             if smart_token in token:
                 candidates.add(tech_name)
 
+    if len(candidates | html_candidates) > 1000:
+        html_candidates = set()
+        for token in _tokenize_text(body):
+            if len(token) >= 9:
+                html_candidates.update(SIGNATURES_BY_HTML_TOKEN.get(token, []))
+    candidates.update(html_candidates)
+
     return candidates
 
 
-def run_fingerprints(headers: dict, cookies: dict, body: str, url: str = "", progress: Optional[Callable[[str], None]] = None) -> list[Detection]:
+def run_fingerprints(
+    headers: dict,
+    cookies: dict,
+    body: str,
+    url: str = "",
+    progress: Optional[Callable[[str], None]] = None,
+    sources: Optional[set[str]] = None,
+) -> list[Detection]:
     def report(message: str):
         if progress:
             progress(message)
@@ -1348,27 +1373,27 @@ def run_fingerprints(headers: dict, cookies: dict, body: str, url: str = "", pro
         confidence = "low"
         candidates = []
 
-        h_match, h_ver, h_ev = _match_headers(sig, headers)
+        h_match, h_ver, h_ev = _match_headers(sig, headers) if not sources or "headers" in sources else (False, None, "")
         if h_match:
             candidates.append((4, h_ver, h_ev))
 
-        m_match, m_ver, m_ev = _match_meta(sig, meta)
+        m_match, m_ver, m_ev = _match_meta(sig, meta) if not sources or "meta" in sources else (False, None, "")
         if m_match:
             candidates.append((3, m_ver, m_ev))
 
-        s_match, s_ver, s_ev = _match_scripts(sig, scripts)
+        s_match, s_ver, s_ev = _match_scripts(sig, scripts) if not sources or "scripts" in sources else (False, None, "")
         if s_match:
             candidates.append((2, s_ver, s_ev))
 
-        b_match, b_ver, b_ev = _match_html(sig, body)
+        b_match, b_ver, b_ev = _match_html(sig, body) if not sources or "html" in sources else (False, None, "")
         if b_match:
             candidates.append((1, b_ver, b_ev))
 
-        c_match, c_ev = _match_cookies(sig, cookies)
+        c_match, c_ev = _match_cookies(sig, cookies) if not sources or "cookies" in sources else (False, "")
         if c_match:
             candidates.append((0, None, c_ev))
 
-        if path:
+        if path and (not sources or "paths" in sources):
             for pattern in sig.get("paths", []):
                 if pattern.search(path):
                     candidates.append((0, None, f"Path: {path}"))
@@ -1506,7 +1531,14 @@ def scan(
         report(f"response received {result.status_code}")
         parsed = urlparse(result.final_url)
         hostname = parsed.hostname or hostname
-        result.technologies = run_fingerprints(resp_headers, cookies, body, url=result.final_url, progress=progress)
+        result.technologies = run_fingerprints(
+            resp_headers,
+            cookies,
+            body,
+            url=result.final_url,
+            progress=progress,
+            sources={"headers"} if plan.get("headers") and not plan.get("tech") else None,
+        )
         result.notes = detect_contradictions(result.technologies)
         if "cve" in (modules or []) or "cves" in (modules or []):
             _correlate_detection_cves(result.technologies, min_severity=cve_min_severity)
@@ -1531,7 +1563,14 @@ def scan(
             report(f"response received {result.status_code}")
             parsed = urlparse(result.final_url)
             hostname = parsed.hostname or hostname
-            result.technologies = run_fingerprints(resp_headers, cookies, body, url=result.final_url, progress=progress)
+            result.technologies = run_fingerprints(
+                resp_headers,
+                cookies,
+                body,
+                url=result.final_url,
+                progress=progress,
+                sources={"headers"} if plan.get("headers") and not plan.get("tech") else None,
+            )
             result.notes = detect_contradictions(result.technologies)
             if "cve" in (modules or []) or "cves" in (modules or []):
                 _correlate_detection_cves(result.technologies, min_severity=cve_min_severity)
