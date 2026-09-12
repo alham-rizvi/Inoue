@@ -1,5 +1,5 @@
 <h1 align="center">
-  <img width="1207" height="725" alt="image" src="https://github.com/user-attachments/assets/a0a18ab2-2348-443b-8a25-de3dad256ed6" /> Inoue
+  <img width="150" height="150" alt="Green Black Professional Minimal Fashion Brand Logo" src="https://github.com/user-attachments/assets/b2277aa7-5c74-4bb0-86bd-b7c98b5dbbbe" alt="Inoue" width="64" valign="middle" /> Inoue
 
 </h1>
 

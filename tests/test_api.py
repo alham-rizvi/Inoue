@@ -45,6 +45,13 @@ class ApiBackendTests(unittest.TestCase):
                 cve_min_severity=None,
                 allow_private_targets=False,
                 crawl_pages=0,
+                active_subdomains=False,
+                active_ports=False,
+                nuclei_scan=False,
+                nuclei_severity=None,
+                harvest_urls=False,
+                screenshot=False,
+                screenshot_dir="/tmp/inoue-screenshots",
             )
             return response
 
@@ -79,6 +86,13 @@ class ApiBackendTests(unittest.TestCase):
             cve_min_severity=None,
             allow_private_targets=False,
             crawl_pages=0,
+            active_subdomains=False,
+            active_ports=False,
+            nuclei_scan=False,
+            nuclei_severity=None,
+            harvest_urls=False,
+            screenshot=False,
+            screenshot_dir="/tmp/inoue-screenshots",
         )
         self.assertEqual(payload["technologies"][0]["name"], "Nginx")
 
