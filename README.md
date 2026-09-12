@@ -1,3 +1,6 @@
+<img width="640" height="320" alt="e (2)" src="https://github.com/user-attachments/assets/1a5c5812-49d0-46ed-a0ca-de36e5db5add" />
+
+
 # Inoue
 <img width="797" height="733" alt="image" src="https://github.com/user-attachments/assets/e2101e22-1391-4056-a98a-d65f1a6f8a5f" />
 
