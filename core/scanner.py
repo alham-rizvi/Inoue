@@ -29,6 +29,9 @@ except ImportError:  # pragma: no cover - optional dependency
 import httpx
 from core.cache import ScanCache
 from core.cve import correlate_cves, load_cve_dataset
+from core.scope import RequestBudget, ScopeError, ScopeMatcher
+from core.waf import detect_waf, probe_waf, serialize_waf
+from core.js_intel import collect_js_intel, grade_security_headers, conventional_paths, exposure_paths
 
 from fingerprints.signatures import (
     COMPILED_SIGNATURES,
@@ -77,6 +80,8 @@ class ScanResult:
     error: Optional[str] = None
     enriched: dict = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
+    waf: list[dict] = field(default_factory=list)
+    js_intel: dict = field(default_factory=dict)
     cache_hit: bool = False
 
 
@@ -421,6 +426,11 @@ def build_recon_plan(requested: Optional[list[str]] = None) -> dict:
         "passive": False,
         "company": False,
         "cve": False,
+        "waf": False,
+        "js_intel": False,
+        "api": False,
+        "exposure": False,
+        "takeover": False,
     }
     if not requested:
         modules.update({"headers": True, "tech": True, "smart": True})
@@ -457,6 +467,14 @@ def build_recon_plan(requested: Optional[list[str]] = None) -> dict:
         modules["extra"] = True
     if cve_correlation:
         modules["cve"] = True
+    if "intel" in selected or "js" in selected or "js-intel" in selected:
+        modules["js_intel"] = True
+    if "waf" in selected or "waf-probe" in selected:
+        modules["waf"] = True
+    if "api" in selected:
+        modules["api"] = True
+    if "exposure" in selected or "sensitive" in selected:
+        modules["exposure"] = True
 
     if fast_scan:
         modules.update({
@@ -489,6 +507,10 @@ def build_recon_plan(requested: Optional[list[str]] = None) -> dict:
             "active": True,
             "passive": True,
             "company": True,
+            "waf": True,
+            "js_intel": True,
+            "api": True,
+            "exposure": True,
         })
     return modules
 
@@ -995,6 +1017,30 @@ def _scan_common_ports(hostname: str, timeout: int = 1) -> list[dict]:
         return [result for result in executor.map(probe, ports) if result]
 
 
+def _probe_paths(base_url: str, paths: list[str], timeout: int = 3) -> list[dict]:
+    results = []
+    try:
+        with httpx.Client(timeout=timeout, verify=False, follow_redirects=True) as client:
+            for target in paths:
+                try:
+                    response = client.get(target, headers={"User-Agent": "Inoue/1.0 read-only recon"})
+                    if response.status_code < 500 and response.status_code not in {404, 410}:
+                        results.append({"url": target, "status_code": response.status_code, "content_type": response.headers.get("content-type", "")})
+                except Exception:
+                    continue
+    except Exception:
+        return []
+    return results
+
+
+def _probe_conventional_paths(base_url: str, timeout: int = 3) -> list[dict]:
+    return _probe_paths(base_url, conventional_paths(base_url), timeout)
+
+
+def _probe_exposure_paths(base_url: str, timeout: int = 3) -> list[dict]:
+    return _probe_paths(base_url, exposure_paths(base_url), timeout)
+
+
 def _collect_company_intel(hostname: str, body: str = "", headers: Optional[dict] = None) -> dict:
     intel = {}
     try:
@@ -1056,6 +1102,8 @@ def _serialize_scan_result(result: ScanResult) -> dict:
         "directories": result.directories,
         "extra_intel": result.extra_intel,
         "enriched": result.enriched,
+        "waf": result.waf,
+        "js_intel": result.js_intel,
         "error": result.error,
         "notes": result.notes,
         "cache_hit": result.cache_hit,
@@ -1087,6 +1135,8 @@ def serialize_scan_result(result: ScanResult) -> dict:
         "service_hints": result.enriched.get("service_hints", []) if result.enriched else [],
         "plugins": result.enriched.get("plugins", {}) if result.enriched else {},
         "crawl": result.enriched.get("crawl", {}) if result.enriched else {},
+        "waf": result.waf,
+        "js_intel": result.js_intel,
         "notes": result.notes,
         "error": result.error,
         "cache_hit": result.cache_hit,
@@ -1116,6 +1166,8 @@ def _deserialize_scan_result(payload: dict) -> ScanResult:
         error=payload.get("error"),
         notes=payload.get("notes", []),
         cache_hit=bool(payload.get("cache_hit", False)),
+        waf=payload.get("waf", []),
+        js_intel=payload.get("js_intel", {}),
     )
     result.technologies = [Detection(**item) for item in payload.get("technologies", [])]
     return result
@@ -1253,6 +1305,10 @@ async def _async_scan_target(
     progress: Optional[Callable[[str], None]] = None,
     allow_private_targets: bool = True,
     crawl_pages: int = 0,
+    scope_path: Optional[str] = None,
+    max_requests: Optional[int] = None,
+    respect_robots: bool = True,
+    waf_probe: bool = False,
 ) -> ScanResult:
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
@@ -1266,6 +1322,13 @@ async def _async_scan_target(
     }
     parsed = urlparse(url)
     result = ScanResult(url=url, final_url=url, status_code=0, response_time_ms=0)
+    scope = ScopeMatcher.from_file(scope_path)
+    try:
+        if scope:
+            scope.require(url)
+    except ScopeError as exc:
+        result.error = str(exc)
+        return result
     plan = build_recon_plan(modules)
     started = time.perf_counter()
 
@@ -1409,6 +1472,10 @@ async def scan_many(
     cve_min_severity: Optional[str] = None,
     allow_private_targets: bool = True,
     crawl_pages: int = 0,
+    scope_path: Optional[str] = None,
+    max_requests: Optional[int] = None,
+    respect_robots: bool = True,
+    waf_probe: bool = False,
 ) -> list[ScanResult]:
     """Scan multiple targets concurrently using one shared async HTTP client."""
     if not targets:
@@ -1454,6 +1521,7 @@ async def scan_many(
                 client, target, timeout, follow_redirects, modules, plugin_dirs,
                 cve_min_severity, dns, ssl_check, api_key, progress,
                 allow_private_targets, crawl_pages,
+                scope_path, max_requests, respect_robots, waf_probe,
             )
             if cache and not result.error:
                 cache.set(target, cache_module, _serialize_scan_result(result))
@@ -1752,6 +1820,10 @@ def scan(
     cve_min_severity: Optional[str] = None,
     allow_private_targets: bool = True,
     crawl_pages: int = 0,
+    scope_path: Optional[str] = None,
+    max_requests: Optional[int] = None,
+    respect_robots: bool = True,
+    waf_probe: bool = False,
 ) -> ScanResult:
     def report(message: str):
         if progress:
@@ -1762,6 +1834,15 @@ def scan(
 
     parsed = urlparse(url)
     hostname = parsed.hostname or ""
+    scope = ScopeMatcher.from_file(scope_path)
+    try:
+        if scope:
+            scope.require(url)
+    except ScopeError as exc:
+        return ScanResult(url=url, final_url=url, status_code=0, response_time_ms=0, error=str(exc))
+    budget = RequestBudget(max_requests)
+    if not budget.consume():
+        return ScanResult(url=url, final_url=url, status_code=0, response_time_ms=0, error="request budget exhausted")
     report(f"starting request to {url}")
 
     headers_to_send = {
@@ -1809,6 +1890,11 @@ def scan(
         result.notes = detect_contradictions(result.technologies)
         if "cve" in (modules or []) or "cves" in (modules or []):
             _correlate_detection_cves(result.technologies, min_severity=cve_min_severity)
+        if plan.get("waf"):
+            result.waf = serialize_waf(detect_waf(resp_headers, cookies))
+        if plan.get("js_intel"):
+            result.js_intel = collect_js_intel(result.final_url, body, timeout=max(1, min(5, timeout)))
+        result.extra_intel.setdefault("security_headers", grade_security_headers(resp_headers))
 
     except httpx.ConnectError:
         # Try HTTP fallback
@@ -1867,26 +1953,38 @@ def scan(
 
     recon_results = {}
     tasks = []
+    def bounded(fn):
+        def run():
+            if not budget.consume():
+                return None
+            return fn()
+        return run
     if plan.get("dns") and dns and hostname:
-        tasks.append(("dns", lambda: _get_dns(hostname)))
+        tasks.append(("dns", bounded(lambda: _get_dns(hostname))))
     if plan.get("ssl") and hostname and ((ssl_check and parsed.scheme == "https") or result.final_url.startswith("https")):
         final_parsed = urlparse(result.final_url)
-        tasks.append(("ssl", lambda: _get_ssl_info(final_parsed.hostname or hostname)))
+        tasks.append(("ssl", bounded(lambda: _get_ssl_info(final_parsed.hostname or hostname))))
     if plan.get("whois") and hostname:
-        tasks.append(("whois", lambda: _get_whois(hostname)))
+        tasks.append(("whois", bounded(lambda: _get_whois(hostname))))
     if plan.get("mail") and hostname:
-        tasks.append(("mail", lambda: _get_mail_records(hostname)))
+        tasks.append(("mail", bounded(lambda: _get_mail_records(hostname))))
     if plan.get("subdomains") and hostname:
-        tasks.append(("subdomains", lambda: discover_subdomains(hostname)))
+        tasks.append(("subdomains", bounded(lambda: discover_subdomains(hostname))))
     if plan.get("ports") and hostname:
-        tasks.append(("ports", lambda: _scan_common_ports(hostname, timeout=max(1, min(3, timeout // 4)))))
+        tasks.append(("ports", bounded(lambda: _scan_common_ports(hostname, timeout=max(1, min(3, timeout // 4))))) )
     if plan.get("extra") and hostname:
-        tasks.append(("extra", lambda: ({
+        tasks.append(("extra", bounded(lambda: ({
             "directories": _enumerate_directories(result.final_url, result.headers, body, timeout=max(1, min(2, timeout // 4))),
             "intel": _fetch_public_intel(hostname, body),
-        })))
+        }))))
     if plan.get("tech") and hostname:
-        tasks.append(("favicon", lambda: _get_favicon(result.final_url, body, timeout=max(1, min(3, timeout // 4)))))
+        tasks.append(("favicon", bounded(lambda: _get_favicon(result.final_url, body, timeout=max(1, min(3, timeout // 4))))) )
+    if plan.get("waf") and waf_probe and budget.consume():
+        tasks.append(("waf_probe", lambda: probe_waf(result.final_url, timeout=max(1, min(5, timeout)))))
+    if plan.get("api") and budget.consume():
+        tasks.append(("api", lambda: _probe_conventional_paths(result.final_url, timeout=max(1, min(3, timeout)))))
+    if plan.get("exposure") and budget.consume():
+        tasks.append(("exposure", lambda: _probe_exposure_paths(result.final_url, timeout=max(1, min(3, timeout)))))
     if crawl_pages > 0 and hostname:
         tasks.append(("crawl", lambda: _crawl_additional_pages(
             result.final_url, body, headers_to_send, max(1, min(5, timeout)), crawl_pages,
@@ -1936,6 +2034,14 @@ def scan(
 
     crawl_detections, crawl_pages_scanned = recon_results.get("crawl") or ([], [])
     _merge_crawl_and_favicon(result, recon_results.get("favicon"), crawl_detections, crawl_pages_scanned)
+    if recon_results.get("waf_probe"):
+        result.waf.extend(serialize_waf(recon_results["waf_probe"]))
+    if recon_results.get("api"):
+        result.extra_intel["api_surface"] = recon_results["api"]
+    if recon_results.get("exposure"):
+        result.extra_intel["exposure"] = recon_results["exposure"]
+    if result.js_intel:
+        result.extra_intel["parameters"] = result.js_intel.get("parameters", [])
 
     if hostname:
         external = _enrich_with_external_services(hostname, [tech.name for tech in result.technologies], api_key)

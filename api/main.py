@@ -37,6 +37,9 @@ class ScanRequest(BaseModel):
     cve_min_severity: Optional[str] = None
     crawl_pages: int = Field(0, ge=0, le=5, description="Fetch up to N additional same-origin pages to widen detection")
     save_history: bool = Field(False, description="Append this scan to the local history DB for later timeline lookups")
+    scope_path: Optional[str] = None
+    max_requests: Optional[int] = Field(None, ge=1)
+    waf_probe: bool = False
 
 
 class BatchRequest(BaseModel):
@@ -49,6 +52,9 @@ class BatchRequest(BaseModel):
     rate_limit: Optional[float] = Field(None, gt=0, le=100)
     crawl_pages: int = Field(0, ge=0, le=5, description="Fetch up to N additional same-origin pages to widen detection")
     save_history: bool = Field(False, description="Append each scanned target to the local history DB")
+    scope_path: Optional[str] = None
+    max_requests: Optional[int] = Field(None, ge=1)
+    waf_probe: bool = False
 
 
 def validate_public_target(target: str, allow_private: bool = False) -> None:
@@ -110,15 +116,24 @@ def create_app() -> Optional[FastAPI]:
 
     async def scan_target(payload: ScanRequest):
         validate_public_target(payload.target, allow_private_targets)
+        scan_kwargs = {
+            "timeout": payload.timeout,
+            "follow_redirects": payload.follow_redirects,
+            "modules": payload.modules,
+            "cve_min_severity": payload.cve_min_severity,
+            "allow_private_targets": allow_private_targets,
+            "crawl_pages": payload.crawl_pages,
+        }
+        if payload.scope_path:
+            scan_kwargs["scope_path"] = payload.scope_path
+        if payload.max_requests:
+            scan_kwargs["max_requests"] = payload.max_requests
+        if payload.waf_probe:
+            scan_kwargs["waf_probe"] = True
         result = await asyncio.to_thread(
             scan,
             payload.target,
-            timeout=payload.timeout,
-            follow_redirects=payload.follow_redirects,
-            modules=payload.modules,
-            cve_min_severity=payload.cve_min_severity,
-            allow_private_targets=allow_private_targets,
-            crawl_pages=payload.crawl_pages,
+            **scan_kwargs,
         )
         if payload.save_history and not result.error:
             from core.history import DEFAULT_HISTORY_PATH, record_snapshot
@@ -133,16 +148,25 @@ def create_app() -> Optional[FastAPI]:
             raise HTTPException(status_code=400, detail=f"Batch size exceeds {max_batch_size}")
         for target in payload.targets:
             validate_public_target(target, allow_private_targets)
+        batch_kwargs = {
+            "timeout": payload.timeout,
+            "follow_redirects": payload.follow_redirects,
+            "modules": payload.modules,
+            "workers": payload.workers,
+            "rate_limit": payload.rate_limit,
+            "cve_min_severity": payload.cve_min_severity,
+            "allow_private_targets": allow_private_targets,
+            "crawl_pages": payload.crawl_pages,
+        }
+        if payload.scope_path:
+            batch_kwargs["scope_path"] = payload.scope_path
+        if payload.max_requests:
+            batch_kwargs["max_requests"] = payload.max_requests
+        if payload.waf_probe:
+            batch_kwargs["waf_probe"] = True
         results = await scan_many(
             payload.targets,
-            timeout=payload.timeout,
-            follow_redirects=payload.follow_redirects,
-            modules=payload.modules,
-            workers=payload.workers,
-            rate_limit=payload.rate_limit,
-            cve_min_severity=payload.cve_min_severity,
-            allow_private_targets=allow_private_targets,
-            crawl_pages=payload.crawl_pages,
+            **batch_kwargs,
         )
         if payload.save_history:
             from core.history import DEFAULT_HISTORY_PATH, record_snapshot

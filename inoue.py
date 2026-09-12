@@ -678,6 +678,15 @@ def main(
     cve_min_severity: Optional[str] = typer.Option(None, "--cve-min-severity", help="Minimum CVE severity: low, medium, high, or critical"),
     fail_on_cve: bool = typer.Option(False, "--fail-on-cve", help="Exit with code 2 when CVEs are found"),
     crawl: int = typer.Option(0, "--crawl", help="Fetch up to N additional same-origin pages to widen tech detection (0 disables)"),
+    scope_path: Optional[str] = typer.Option(None, "--scope", help="YAML/JSON scope file"),
+    max_requests: Optional[int] = typer.Option(None, "--max-requests", min=1, help="Maximum requests for one target"),
+    respect_robots: bool = typer.Option(True, "--respect-robots/--ignore-robots", help="Respect robots.txt during crawl"),
+    waf: bool = typer.Option(False, "--waf", help="Run passive WAF/CDN detection"),
+    waf_probe: bool = typer.Option(False, "--waf-probe", help="Opt-in benign unusual-path WAF probe"),
+    js_intel: bool = typer.Option(False, "--js-intel", help="Harvest and analyze JavaScript bundles"),
+    api_surface: bool = typer.Option(False, "--api-surface", help="Check conventional API paths"),
+    exposure: bool = typer.Option(False, "--exposure", help="Check bounded sensitive-file paths"),
+    export_params: Optional[str] = typer.Option(None, "--export-params", help="Write mined JS parameter names to FILE"),
     save_history: bool = typer.Option(False, "--save-history", help="Append this scan's result to the local history DB for later 'inoue history' timelines"),
     history_path: Optional[str] = typer.Option(None, "--history-path", help="SQLite history DB path (default ~/.cache/inoue/history.db)"),
 ):
@@ -804,7 +813,7 @@ def main(
             console.print("[yellow]TLS fingerprinting unavailable[/yellow]: optional TLS tooling is not installed; skipping best-effort metadata capture.")
             tls_fingerprint = False
 
-    if any([service, headers, dns, ssl, whois, subdomains, mail, ports, extra, fast, full_recon, all_modules, smart, active, passive, company, cve]) and modules is None:
+    if any([service, headers, dns, ssl, whois, subdomains, mail, ports, extra, fast, full_recon, all_modules, smart, active, passive, company, cve, waf, waf_probe, js_intel, api_surface, exposure]) and modules is None:
         modules = []
     if modules is not None:
         modules = [m.lower() for m in modules]
@@ -845,6 +854,16 @@ def main(
         modules.append("company")
     if cve:
         modules.append("cve")
+    if waf or waf_probe:
+        modules.append("waf")
+    if js_intel:
+        modules.append("js-intel")
+    if api_surface:
+        modules.append("api")
+    if exposure:
+        modules.append("exposure")
+    if export_params and "js-intel" not in modules:
+        modules.append("js-intel")
 
     if modules == []:
         modules = None
@@ -897,6 +916,10 @@ def main(
                 plugin_dirs=[plugin_dir] if plugin_dir else None,
                 cve_min_severity=cve_min_severity,
                 crawl_pages=crawl,
+                scope_path=scope_path,
+                max_requests=max_requests,
+                respect_robots=respect_robots,
+                waf_probe=waf_probe,
             )))
             for target in targets:
                 progress.remove_task(tasks_map[target])
@@ -916,6 +939,10 @@ def main(
                         cve_min_severity=cve_min_severity,
                         progress=make_progress_callback(t, tasks_map[t]),
                         crawl_pages=crawl,
+                        scope_path=scope_path,
+                        max_requests=max_requests,
+                        respect_robots=respect_robots,
+                        waf_probe=waf_probe,
                     ): t
                     for t in targets
                 }
@@ -946,6 +973,11 @@ def main(
                 console.print(f"  [yellow]history save failed[/yellow] for {result.url}: {exc}")
         if saved_count and not json_out:
             console.print(f"  [green]saved[/green] {saved_count} snapshot(s) to {db_path}")
+    if export_params:
+        params = sorted({p for result in results for p in result.js_intel.get("parameters", [])})
+        Path(export_params).write_text("\n".join(params) + ("\n" if params else ""), encoding="utf-8")
+        if not json_out:
+            console.print(f"  [green]saved[/green] {len(params)} parameters to {export_params}")
 
     if nuclei_out:
         try:
