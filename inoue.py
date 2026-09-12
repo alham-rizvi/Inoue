@@ -377,6 +377,8 @@ def result_to_dict(result: ScanResult) -> dict:
         "service_hints": result.enriched.get("service_hints", []) if result.enriched else [],
         "plugins": result.enriched.get("plugins", {}) if result.enriched else {},
         "enriched": result.enriched,
+        "waf": result.waf,
+        "js_intel": result.js_intel,
         "notes": result.notes,
         "error": result.error,
         "cache_hit": getattr(result, "cache_hit", False),
