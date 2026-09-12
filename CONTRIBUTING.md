@@ -55,7 +55,7 @@ This is the most common contribution. Follow this process:
        "paths": [r"/admin", r"/config"],
    }
    ```
-4. **Test locally**: `python inoue.py https://example.com -e`
+4. **Test locally**: `python inoue.py https://alhamrizvi.in -e`
 5. **Run test suite**: `python -m unittest discover -s tests -p 'test*.py' -q`
 
 #### Fixture-based signature tests

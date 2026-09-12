@@ -164,10 +164,10 @@ python -m compileall core fingerprints inoue.py
 
 ```bash
 # Test against a known service
-python inoue.py https://example.com -e
+python inoue.py https://alhamrizvi.in -e
 
 # Verify version detection
-python inoue.py https://example.com -v -e
+python inoue.py https://alhamrizvi.in -v -e
 ```
 
 ### Check for common issues

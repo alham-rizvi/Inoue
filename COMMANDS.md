@@ -80,8 +80,8 @@ The CLI now shows live scan progress while each target is scanned and reports di
 Examples:
 
 ```bash
-python inoue.py example.com
-python inoue.py https://target.example
+python inoue.py alhamrizvi.in
+python inoue.py https://alhamrizvi.in
 python inoue.py 10.10.10.10
 ```
 
@@ -237,31 +237,31 @@ cat targets.txt | python inoue.py --json
 Limit requests per host during async batch scans:
 
 ```bash
-python inoue.py --rate-limit 1 target.com
+python inoue.py --rate-limit 1 alhamrizvi.in
 ```
 ```
 
 ## JSON output
 
 ```bash
-python inoue.py --json <target>
+python inoue.py --json alhamrizvi.in
 ```
 
 Save JSON to a file:
 
 ```bash
-python inoue.py --json -o results.json <target>
+python inoue.py --json -o results.json alhamrizvi.in
 
 Save a self-contained HTML report:
 
 ```bash
-python inoue.py -o report.html <target>
+python inoue.py -o report.html alhamrizvi.in
 ```
 
 ## Local cache
 
 ```bash
-python inoue.py --cache --cache-ttl 3600 <target>
+python inoue.py --cache --cache-ttl 3600 alhamrizvi.in
 ```
 
 The default cache is `~/.cache/inoue/cache.db`; use `--cache-path` to override it.
@@ -282,7 +282,7 @@ plugin_dir = "./modules"
 ## CVE awareness
 
 ```bash
-python inoue.py --cve <target>
+python inoue.py --cve alhamrizvi.in
 ```
 
 This uses the bundled offline dataset and reports informational matches only.
@@ -290,7 +290,7 @@ This uses the bundled offline dataset and reports informational matches only.
 Filter CVE output by severity:
 
 ```bash
-python inoue.py --cve --cve-min-severity high <target>
+python inoue.py --cve --cve-min-severity high alhamrizvi.in
 ```
 
 Use `--fail-on-cve` to return exit code `2` when a matching CVE is found.
@@ -308,7 +308,7 @@ Use `--source-url` for a reviewed feed mirror and `-o` to write a separate datas
 ## Nuclei export
 
 ```bash
-python inoue.py --nuclei-out nuclei-targets.json <target>
+python inoue.py --nuclei-out nuclei-targets.json alhamrizvi.in
 ```
 
 The export is a JSON mapping of normalized technology tags to target URLs.
@@ -336,7 +336,7 @@ python scripts/audit_signatures.py --stale-days 180
 ## Worker count
 
 ```bash
-python inoue.py -w 10 <target>
+python inoue.py -w 10 alhamrizvi.in
 ```
 
 ## Hide banner
@@ -384,7 +384,7 @@ python inoue.py --no-dns -t 5 10.10.11.55
 
 ```bash
 # Full recon with evidence and JSON export
-python inoue.py -v -e --json -o results.json https://target.example
+python inoue.py -v -e --json -o results.json https://alhamrizvi.in
 
 # Fast scan for a lab target
 python inoue.py --no-dns -t 5 10.10.11.55

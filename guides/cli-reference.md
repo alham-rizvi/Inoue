@@ -8,15 +8,15 @@ Use the installed global command:
 
 ```bash
 inoue --help
-inoue example.com
-inoue -v -e https://example.com
+inoue alhamrizvi.in
+inoue -v -e https://alhamrizvi.in
 ```
 
 Use the repository entry point during local development:
 
 ```bash
 python inoue.py --help
-python inoue.py example.com
+python inoue.py alhamrizvi.in
 ```
 
 The installed command is the intended production path. The Python file is still supported for local development and debugging.
@@ -26,38 +26,38 @@ The installed command is the intended production path. The Python file is still 
 ### Basic scan
 
 ```bash
-inoue example.com
+inoue alhamrizvi.in
 ```
 
 ### Verbose scan
 
 ```bash
-inoue -v example.com
+inoue -v alhamrizvi.in
 ```
 
 ### Evidence output
 
 ```bash
-inoue -e https://example.com
+inoue -e https://alhamrizvi.in
 ```
 
 ### JSON output
 
 ```bash
-inoue --json example.com
-inoue --json -o results.json example.com
+inoue --json alhamrizvi.in
+inoue --json -o results.json alhamrizvi.in
 ```
 
 ### HTML report output
 
 ```bash
-inoue -o report.html example.com
+inoue -o report.html alhamrizvi.in
 ```
 
 ### Markdown report output
 
 ```bash
-inoue -o report.md example.com
+inoue -o report.md alhamrizvi.in
 ```
 
 ### Multi target scan
@@ -83,69 +83,69 @@ cat targets.txt | inoue --json
 ### Fast mode
 
 ```bash
-inoue --fast example.com
-inoue -m fast example.com
+inoue --fast alhamrizvi.in
+inoue -m fast alhamrizvi.in
 ```
 
 ### Full recon mode
 
 ```bash
-inoue --full-recon example.com
-inoue -m full-recon example.com
+inoue --full-recon alhamrizvi.in
+inoue -m full-recon alhamrizvi.in
 ```
 
 ### Service only mode
 
 ```bash
-inoue --service example.com
+inoue --service alhamrizvi.in
 ```
 
 ### Header only mode
 
 ```bash
-inoue --headers example.com
+inoue --headers alhamrizvi.in
 ```
 
 ### DNS only mode
 
 ```bash
-inoue --dns example.com
+inoue --dns alhamrizvi.in
 ```
 
 ### SSL only mode
 
 ```bash
-inoue --ssl example.com
+inoue --ssl alhamrizvi.in
 ```
 
 ### Whois only mode
 
 ```bash
-inoue --whois example.com
+inoue --whois alhamrizvi.in
 ```
 
 ### Subdomain mode
 
 ```bash
-inoue --subdomains example.com
+inoue --subdomains alhamrizvi.in
 ```
 
 ### Mail record mode
 
 ```bash
-inoue --mail example.com
+inoue --mail alhamrizvi.in
 ```
 
 ### Port scan mode
 
 ```bash
-inoue --ports example.com
+inoue --ports alhamrizvi.in
 ```
 
 ### Extra recon mode
 
 ```bash
-inoue --extra example.com
+inoue --extra alhamrizvi.in
 ```
 
 ## Global options
@@ -153,31 +153,31 @@ inoue --extra example.com
 ### Timeout
 
 ```bash
-inoue -t 15 example.com
+inoue -t 15 alhamrizvi.in
 ```
 
 ### Worker count
 
 ```bash
-inoue -w 10 example.com
+inoue -w 10 alhamrizvi.in
 ```
 
 ### Network rate limiting
 
 ```bash
-inoue --rate-limit 2 example.com
+inoue --rate-limit 2 alhamrizvi.in
 ```
 
 ### Disable banner
 
 ```bash
-inoue --no-banner example.com
+inoue --no-banner alhamrizvi.in
 ```
 
 ### Set an API key for enrichment services
 
 ```bash
-inoue --api-key yourkey example.com
+inoue --api-key yourkey alhamrizvi.in
 ```
 
 ## Cache options
@@ -185,19 +185,19 @@ inoue --api-key yourkey example.com
 Enable caching:
 
 ```bash
-inoue --cache example.com
+inoue --cache alhamrizvi.in
 ```
 
 Set a custom cache path:
 
 ```bash
-inoue --cache --cache-path /tmp/inoue-cache.db example.com
+inoue --cache --cache-path /tmp/inoue-cache.db alhamrizvi.in
 ```
 
 Set a custom cache TTL:
 
 ```bash
-inoue --cache --cache-ttl 3600 example.com
+inoue --cache --cache-ttl 3600 alhamrizvi.in
 ```
 
 ## CVE matching
@@ -205,19 +205,19 @@ inoue --cache --cache-ttl 3600 example.com
 Enable local CVE correlation:
 
 ```bash
-inoue --cve example.com
+inoue --cve alhamrizvi.in
 ```
 
 Set a minimum severity floor:
 
 ```bash
-inoue --cve --cve-min-severity high example.com
+inoue --cve --cve-min-severity high alhamrizvi.in
 ```
 
 Fail exit if a CVE match is found:
 
 ```bash
-inoue --cve --fail-on-cve example.com
+inoue --cve --fail-on-cve alhamrizvi.in
 ```
 
 Refresh the local CVE store:
@@ -231,25 +231,25 @@ inoue update-cve
 ### Nuclei output
 
 ```bash
-inoue --nuclei-out targets.json example.com
+inoue --nuclei-out targets.json alhamrizvi.in
 ```
 
 ### JSON export file
 
 ```bash
-inoue --json -o results.json example.com
+inoue --json -o results.json alhamrizvi.in
 ```
 
 ### HTML export file
 
 ```bash
-inoue -o report.html example.com
+inoue -o report.html alhamrizvi.in
 ```
 
 ### Markdown export file
 
 ```bash
-inoue -o report.md example.com
+inoue -o report.md alhamrizvi.in
 ```
 
 ## Update commands

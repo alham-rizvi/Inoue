@@ -13,6 +13,8 @@ dependencies = [
 	"python-whois>=0.8",
 	"requests>=2.31",
 	"beautifulsoup4>=4.12",
+	"sslyze>=6.0.0",
+	"python-nmap>=0.7.1",
 	"tomli>=2.0; python_version < '3.11'",
 ]
 
@@ -50,6 +52,8 @@ dnspython = ">=2.6"
 python-whois = ">=0.8"
 requests = ">=2.31"
 beautifulsoup4 = ">=4.12"
+sslyze = ">=6.0.0"
+python-nmap = ">=0.7.1"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

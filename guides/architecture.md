@@ -122,7 +122,7 @@ sequenceDiagram
     participant RES as Result serializer
     participant OUT as Console/JSON/HTML
 
-    U->>CLI: inoue example.com
+    U->>CLI: inoue alhamrizvi.in
     CLI->>CFG: load config
     CLI->>SC: scan target with selected modules
     SC->>NET: fetch target and inspect metadata

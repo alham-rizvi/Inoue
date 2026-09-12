@@ -19,7 +19,7 @@ curl http://localhost:8000/signatures
 ```bash
 curl -X POST http://localhost:8000/scan \
   -H 'Content-Type: application/json' \
-  -d '{"target":"https://example.com","modules":["headers","tech"]}'
+  -d '{"target":"https://alhamrizvi.in","modules":["headers","tech"]}'
 ```
 
 Request detailed WHOIS and RDAP data for a domain:
@@ -27,7 +27,7 @@ Request detailed WHOIS and RDAP data for a domain:
 ```bash
 curl -sS -X POST http://localhost:8000/scan \
   -H 'Content-Type: application/json' \
-  -d '{"target":"https://github.com","modules":["whois"]}' \
+  -d '{"target":"https://alhamrizvi.in","modules":["whois"]}' \
   | python -m json.tool
 ```
 
@@ -42,7 +42,7 @@ service; no API key is required.
 ```bash
 curl -X POST http://localhost:8000/scan/batch \
   -H 'Content-Type: application/json' \
-  -d '{"targets":["https://example.com","https://example.org"],"workers":2}'
+  -d '{"targets":["https://alhamrizvi.in","https://example.org"],"workers":2}'
 ```
 
 Set `INOUE_API_KEY` and send the `X-API-Key` header when the API is configured to require authentication.

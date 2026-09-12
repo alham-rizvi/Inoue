@@ -50,15 +50,15 @@ The package exposes the console script named `inoue` through the project entry p
 This means you can run the tool in normal shell usage without referencing the Python file directly:
 
 ```bash
-inoue example.com
-inoue -v -e https://example.com
-inoue --json -o results.json https://example.com
+inoue alhamrizvi.in
+inoue -v -e https://alhamrizvi.in
+inoue --json -o results.json https://alhamrizvi.in
 ```
 
 The Python entry point is also still valid for local development:
 
 ```bash
-python inoue.py example.com
+python inoue.py alhamrizvi.in
 ```
 
 The installed command is the recommended path for docs, automation, and production usage.
@@ -111,7 +111,7 @@ Single scan request:
 ```bash
 curl -X POST http://127.0.0.1:8000/scan \
   -H 'Content-Type: application/json' \
-  -d '{"target":"https://example.com","modules":["fast"]}'
+  -d '{"target":"https://alhamrizvi.in","modules":["fast"]}'
 ```
 
 Batch scan request:
@@ -119,7 +119,7 @@ Batch scan request:
 ```bash
 curl -X POST http://127.0.0.1:8000/scan/batch \
   -H 'Content-Type: application/json' \
-  -d '{"targets":["https://example.com","https://example.org"],"workers":2}'
+  -d '{"targets":["https://alhamrizvi.in","https://example.org"],"workers":2}'
 ```
 
 ## Browser extension setup
@@ -162,7 +162,7 @@ Use these commands to confirm the install is correct:
 ```bash
 inoue --help
 inoue about
-inoue example.com
+inoue alhamrizvi.in
 ```
 
 A working install should show the banner and render a result for a reachable target. If a scan fails, check the error details and verify the network path, TLS settings, and target accessibility.

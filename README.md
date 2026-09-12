@@ -182,16 +182,16 @@ Load the generated ZIP or the `extension/` directory as an unpacked extension.
 
 ```bash
 # Basic scan
-python inoue.py example.com
+python inoue.py alhamrizvi.in
 
 # Verbose scan with SSL, DNS, headers, and security inspection
-python inoue.py -v target.htb
+python inoue.py -v alhamrizvi.in
 
 # Show the evidence behind each detection
-python inoue.py -e https://target.com
+python inoue.py -e https://alhamrizvi.in
 
 # Full recon-style scan
-python inoue.py -v -e https://target.com
+python inoue.py -v -e https://alhamrizvi.in
 
 # Scan multiple targets concurrently
 python inoue.py site1.com site2.com site3.com
@@ -201,29 +201,29 @@ python inoue.py --list targets.txt
 cat targets.txt | python inoue.py --json
 
 # Rate-limit and cache repeat scans
-python inoue.py --rate-limit 1 --cache target.com
+python inoue.py --rate-limit 1 --cache alhamrizvi.in
 
 # Correlate detected versions with the local CVE dataset
-python inoue.py --cve target.com
-python inoue.py --cve --cve-min-severity high target.com
-python inoue.py --cve --fail-on-cve target.com
+python inoue.py --cve alhamrizvi.in
+python inoue.py --cve --cve-min-severity high alhamrizvi.in
+python inoue.py --cve --fail-on-cve alhamrizvi.in
 
 # Refresh the local CVE dataset explicitly
 python inoue.py update-cve
 
 # Export technology-tagged URLs for downstream nuclei workflows
-python inoue.py --nuclei-out nuclei-targets.json target.com
+python inoue.py --nuclei-out nuclei-targets.json alhamrizvi.in
 
 # JSON output
-python inoue.py --json target.com
-python inoue.py --json -o results.json target.com
-python inoue.py -o report.html target.com
+python inoue.py --json alhamrizvi.in
+python inoue.py --json -o results.json alhamrizvi.in
+python inoue.py -o report.html alhamrizvi.in
 
 # Fast HTB/CTF style scan without DNS
 python inoue.py --no-dns -t 5 10.10.11.55
 
 # Skip SSL checks for HTTP-only or self-signed targets
-python inoue.py --no-ssl http://target.htb
+python inoue.py --no-ssl https://alhamrizvi.in
 
 # Pull the latest catalog and scanner updates from the repository
 python inoue.py update
