@@ -305,7 +305,157 @@ python inoue.py update-cve
 
 Use `--source-url` for a reviewed feed mirror and `-o` to write a separate dataset file.
 
-## Nuclei export
+## WAF / CDN detection
+
+Automatic on every scan, no flag needed - Inoue checks the headers/cookies
+it already fetched against a catalog of ~15 major WAF/CDN vendors
+(Cloudflare, Akamai, CloudFront, AWS WAF, Incapsula, Sucuri, Fastly, Azure
+Front Door, F5, and others). Purely passive: no extra requests, no probing.
+
+Shown as its own section above the technology table, and available as
+`result.waf` / the `waf` field in JSON output.
+
+## Security header grade and CORS check
+
+Also automatic and free - computed from the same headers as every other
+check. Reports which of the six common protective headers
+(HSTS, CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy,
+Permissions-Policy) are present, with a 0-100 score, and flags the two
+CORS misconfiguration patterns that are almost always a real problem:
+a wildcard origin combined with credentials allowed, or a specific origin
+allowed alongside credentials (worth checking whether it's actually
+reflected rather than allowlisted). A bare wildcard origin with no
+credentials header is the normal way to serve a public API and is never
+flagged.
+
+Available as `security_grade` / `cors_misconfig` in JSON output.
+
+## Favicon hashing
+
+Computed automatically whenever technology detection runs (part of the
+`tech` module / default scan). Fetches the page's favicon, hashes it
+(md5 always; mmh3/Shodan-style hashing when the optional `mmh3` package
+is installed), and checks it against `fingerprints/favicon_hashes.py`.
+
+The catalog ships empty by design - favicon bytes vary across
+software/theme versions, and a wrong hash produces a false positive that
+is worse than no signal. Populate it yourself with verified hashes:
+
+```bash
+python scripts/collect_favicon_hash.py https://known-instance.example "TechName" "Category"
+```
+
+## Extended DNS and WHOIS records
+
+The `--dns` module now also resolves CAA, SOA, and SRV records, checks
+for DNSSEC (DS/DNSKEY presence), and does a reverse DNS (PTR) lookup on
+every resolved IP. The `--whois` module now also does an IP/ASN WHOIS
+lookup via RDAP - who owns the network block the target's IP sits in, not
+just who owns the domain name.
+
+## Crawl mode
+
+```bash
+python inoue.py --crawl 3 <target>
+```
+
+Fetches up to N additional same-origin pages and fingerprints each,
+merging in anything new (medium/high confidence only, to avoid flooding
+results with weak path-only matches from secondary pages). Candidates
+come from `sitemap.xml` (including one level of sitemap-index following)
+and on-page links by default.
+
+```bash
+python inoue.py --crawl 5 --crawl-katana <target>
+```
+
+Adds katana (if installed) as an extra crawl-candidate source for
+JS-aware link discovery beyond plain `<a href>` scanning.
+
+## JS bundle intelligence
+
+```bash
+python inoue.py --js-intel <target>
+python inoue.py --js-intel --js-intel-bundles 5 <target>
+```
+
+Fetches the page's own JS bundles (bounded, default 3, size-capped) and:
+
+- Feeds the bundle text back through the full ~21,000-signature
+  fingerprint catalog, so client-rendered stacks (React, Vue, Next.js,
+  Nuxt...) that never appear in the static HTML alone can still be
+  detected. These detections are tagged `[JS bundle]` in evidence output.
+- Detects SSR/hydration markers (`window.__NEXT_DATA__`, `__NUXT__`,
+  `__APOLLO_STATE__`, etc.) directly from the initial HTML.
+- Extracts candidate API endpoint paths referenced in the bundles - a
+  recon signal for later fuzzing with a dedicated tool, never probed by
+  Inoue itself.
+- Pattern-matches likely leaked credentials (AWS keys, Google API keys,
+  Slack tokens, Stripe keys, generic bearer tokens). Every match is
+  **redacted to first/last 4 characters** before it's ever returned -
+  the full secret value is never logged, stored, or displayed.
+
+Available as `js_intel` in JSON output.
+
+## Scan history
+
+```bash
+python inoue.py --save-history <target>
+python inoue.py history <target>
+python inoue.py history <target> --json
+```
+
+`--save-history` appends the scan result to a local, append-only SQLite
+database (`~/.cache/inoue/history.db` by default, override with
+`--history-path`). Nothing is ever written automatically - only when you
+explicitly ask. `inoue.py history <target>` then shows a timeline of what
+changed (technologies added/removed/version-bumped, CVEs, open ports,
+certificate expiry) across every saved snapshot for that target. This is
+a separate store from `--cache`, which only ever keeps the most recent
+result per target.
+
+## External security tool integrations
+
+Inoue can shell out to real, purpose-built tools when they're installed,
+rather than reimplementing them badly. Every integration degrades
+gracefully (reports "not found on PATH" with an install hint) when the
+tool isn't present - none of these are required dependencies.
+
+```bash
+python inoue.py --active-subdomains <target>       # subfinder
+python inoue.py --active-ports <target>             # naabu (discovery) + nmap -sV (service ID)
+python inoue.py --nuclei <target>                   # nuclei vulnerability templates
+python inoue.py --nuclei --nuclei-severity high,critical <target>
+python inoue.py --harvest-urls <target>             # gau + waybackurls + katana, merged and deduped
+python inoue.py --screenshot --screenshot-dir ./shots <target>   # gowitness (needs Chrome/Chromium too)
+```
+
+Install whichever you want:
+
+```bash
+sudo apt-get install -y nmap
+go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
+go install github.com/projectdiscovery/naabu/v2/cmd/naabu@latest
+go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
+go install github.com/projectdiscovery/katana/cmd/katana@latest
+go install github.com/lc/gau/v2/cmd/gau@latest
+go install github.com/tomnomnom/waybackurls@latest
+go install github.com/sensepost/gowitness@latest   # also needs Chrome/Chromium
+```
+
+Results land in `enriched.external_tools` in JSON output, with each
+tool's `available`/`results`/`error`/`note` reported separately so a
+missing binary, a tool that ran and found nothing, and a tool that
+errored are never confused with each other.
+
+All of the above are also available on `--all`/`--full-recon` runs via
+the equivalent `scan()`/API parameters, and through the FastAPI
+`/scan` and `/scan/batch` endpoints (`active_subdomains`, `active_ports`,
+`nuclei_scan`, `nuclei_severity`, `harvest_urls`, `screenshot`,
+`screenshot_dir`, `crawl_pages`, `crawl_katana`, `js_intel`,
+`js_intel_bundles`, `save_history`).
+
+
 
 ```bash
 python inoue.py --nuclei-out nuclei-targets.json alhamrizvi.in
@@ -366,8 +516,7 @@ This command:
 4. Updates cached signatures for immediate use
 
 **What gets updated:**
-- New fingerprints in `fingerprints/signatures.py` (700+ core signatures)
-- Extended catalog entries in `fingerprints/extended_catalog.py`
+- New fingerprints in `fingerprints/signatures.py` and `fingerprints/extended_catalog.py` (~21,000 signatures combined)
 - Scanner improvements in `core/scanner.py`
 - CLI and command enhancements in `inoue.py`
 - Documentation updates in `GUIDE.md`, `CONTRIBUTING.md`, `COMMANDS.md`
@@ -391,4 +540,9 @@ python inoue.py --no-dns -t 5 10.10.11.55
 
 # Scan multiple hosts in parallel
 python inoue.py -w 10 site1.com site2.com site3.com
+
+# Bug bounty recon pass: crawl + JS intel + active subdomains + nuclei,
+# save a history snapshot for later diffing
+python inoue.py --crawl 5 --js-intel --active-subdomains --nuclei \
+  --save-history --json -o recon.json https://target.example
 ```

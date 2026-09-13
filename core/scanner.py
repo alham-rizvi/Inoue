@@ -30,6 +30,8 @@ import httpx
 from core import external_tools
 from core.cache import ScanCache
 from core.cve import correlate_cves, load_cve_dataset
+from core.waf import detect_waf
+from core.security_grade import detect_cors_misconfig, grade_security_headers
 
 from fingerprints.signatures import (
     COMPILED_SIGNATURES,
@@ -79,6 +81,7 @@ class ScanResult:
     enriched: dict = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
     cache_hit: bool = False
+    waf: list = field(default_factory=list)
 
 
 def _normalize_version(raw: str) -> Optional[str]:
@@ -353,12 +356,13 @@ def _get_dns(hostname: str) -> dict:
     records = {}
     try:
         import dns.resolver
-        for rtype in ["A", "AAAA", "MX", "NS", "TXT", "CNAME"]:
+        for rtype in ["A", "AAAA", "MX", "NS", "TXT", "CNAME", "CAA", "SOA", "SRV"]:
             try:
                 answers = dns.resolver.resolve(hostname, rtype, lifetime=2)
                 records[rtype] = [str(r) for r in answers]
             except Exception:
                 pass
+        records["DNSSEC"] = _check_dnssec(hostname)
     except ImportError:
         # fallback: just A record via socket
         try:
@@ -368,6 +372,75 @@ def _get_dns(hostname: str) -> dict:
         except Exception:
             pass
     return records
+
+
+def _check_dnssec(hostname: str) -> dict:
+    """Best-effort check for whether DNSSEC is configured (DS record at the
+    parent, DNSKEY at the zone itself). Informational only - absence isn't
+    a misconfiguration on its own, just a recon data point."""
+    result = {"ds_present": False, "dnskey_present": False}
+    try:
+        import dns.resolver
+        try:
+            dns.resolver.resolve(hostname, "DS", lifetime=2)
+            result["ds_present"] = True
+        except Exception:
+            pass
+        try:
+            dns.resolver.resolve(hostname, "DNSKEY", lifetime=2)
+            result["dnskey_present"] = True
+        except Exception:
+            pass
+    except ImportError:
+        pass
+    return result
+
+
+def _get_ptr_records(ip_addresses: list[str]) -> dict:
+    """Reverse DNS lookup for a list of IPs. Frequently reveals the real
+    hosting provider or internal naming scheme behind a CDN-fronted IP."""
+    records = {}
+    for ip in ip_addresses:
+        if not ip:
+            continue
+        try:
+            hostname, _, _ = socket.gethostbyaddr(ip)
+            records[ip] = hostname
+        except Exception:
+            continue
+    return records
+
+
+def _get_ip_whois(ip: str) -> dict:
+    """ASN/network ownership lookup for an IP via RDAP (same bootstrap
+    service already used for domain WHOIS, just the /ip/ endpoint)."""
+    if not ip:
+        return {}
+    try:
+        endpoint = f"https://rdap.org/ip/{ip}"
+        with httpx.Client(timeout=5, verify=True, follow_redirects=True) as client:
+            response = client.get(endpoint, headers={"Accept": "application/rdap+json, application/json"})
+        if response.status_code != 200:
+            return {"error": f"RDAP returned HTTP {response.status_code}", "url": endpoint}
+        payload = response.json()
+        if not isinstance(payload, dict):
+            return {"error": "RDAP returned a non-object response", "url": endpoint}
+        entities = []
+        for entity in payload.get("entities", []):
+            if isinstance(entity, dict) and entity.get("handle"):
+                entities.append({"handle": entity.get("handle"), "roles": entity.get("roles", [])})
+        return {
+            "handle": payload.get("handle"),
+            "name": payload.get("name"),
+            "network_type": payload.get("type"),
+            "start_address": payload.get("startAddress"),
+            "end_address": payload.get("endAddress"),
+            "country": payload.get("country"),
+            "entities": entities,
+            "source": endpoint,
+        }
+    except Exception as exc:
+        return {"error": str(exc)}
 
 
 def _resolve_ip(hostname: str) -> str:
@@ -422,6 +495,8 @@ def build_recon_plan(requested: Optional[list[str]] = None) -> dict:
         "passive": False,
         "company": False,
         "cve": False,
+        "waf": False,
+        "js_intel": False,
     }
     if not requested:
         modules.update({"headers": True, "tech": True, "smart": True})
@@ -475,6 +550,8 @@ def build_recon_plan(requested: Optional[list[str]] = None) -> dict:
 
     if "intel" in selected:
         modules["extra"] = True
+    modules["waf"] = full_recon or "waf" in selected
+    modules["js_intel"] = full_recon or "js-intel" in selected or "js_intel" in selected
     if full_recon:
         modules.update({
             "headers": True,
@@ -801,33 +878,42 @@ def _get_favicon(base_url: str, body: str, timeout: int = 5) -> Optional[dict]:
         return None
 
 
-def _extract_crawl_candidates(body: str, base_url: str, limit: int = 5) -> list[str]:
-    """Pick up to `limit` same-origin page links from the fetched HTML."""
-    if not body or limit <= 0:
-        return []
+def _extract_sitemap_candidates(base_url: str, limit: int = 5, timeout: int = 5) -> list[str]:
+    """Pull page URLs from /sitemap.xml (and any nested sitemaps it points
+    to, one level deep) - often surfaces pages with no on-page link at all,
+    which the plain <a href> scan can never find."""
     from urllib.parse import urlsplit
 
     base_parts = urlsplit(base_url)
-    base_normalized = base_url.rstrip("/")
-    hrefs: list[str] = []
+    sitemap_url = urljoin(base_url, "/sitemap.xml")
     try:
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(body, "html.parser")
-        hrefs = [a.get("href") for a in soup.find_all("a", href=True)]
+        with httpx.Client(timeout=timeout, verify=False, follow_redirects=True) as client:
+            response = client.get(sitemap_url, headers={"User-Agent": "Mozilla/5.0"})
+        if response.status_code != 200 or not response.text.strip():
+            return []
+        locs = re.findall(r"<loc>\s*([^<\s]+)\s*</loc>", response.text, re.IGNORECASE)
     except Exception:
-        hrefs = re.findall(r'href=["\']([^"\']+)["\']', body, re.IGNORECASE)
+        return []
 
-    candidates: list[str] = []
+    # A sitemap index just lists other sitemaps; fetch the first one for
+    # one extra level of real page URLs rather than leaving it unresolved.
+    if "<sitemapindex" in response.text.lower() and locs:
+        try:
+            with httpx.Client(timeout=timeout, verify=False, follow_redirects=True) as client:
+                nested = client.get(locs[0], headers={"User-Agent": "Mozilla/5.0"})
+            if nested.status_code == 200:
+                locs = re.findall(r"<loc>\s*([^<\s]+)\s*</loc>", nested.text, re.IGNORECASE)
+        except Exception:
+            pass
+
+    candidates = []
     seen: set[str] = set()
-    for href in hrefs:
-        if not href or href.startswith(("#", "mailto:", "tel:", "javascript:")):
-            continue
-        absolute = urljoin(base_url, href)
-        parts = urlsplit(absolute)
+    for loc in locs:
+        parts = urlsplit(loc)
         if parts.scheme not in ("http", "https") or parts.netloc != base_parts.netloc:
             continue
         clean = parts._replace(fragment="").geturl()
-        if clean in seen or clean.rstrip("/") == base_normalized:
+        if clean in seen:
             continue
         seen.add(clean)
         candidates.append(clean)
@@ -836,22 +922,105 @@ def _extract_crawl_candidates(body: str, base_url: str, limit: int = 5) -> list[
     return candidates
 
 
+def _extract_katana_candidates(base_url: str, limit: int = 5, timeout: int = 30) -> list[str]:
+    """When katana is installed, use its real crawler (follows JS-rendered
+    links katana's own heuristics pick up, not just static <a href>) as an
+    additional candidate source instead of relying solely on the basic
+    same-origin link scan."""
+    from core import external_tools
+    result = external_tools.run_katana(base_url, depth=2, timeout=timeout)
+    if not result.get("available") or not result.get("results"):
+        return []
+    from urllib.parse import urlsplit
+    base_parts = urlsplit(base_url)
+    candidates = []
+    seen: set[str] = set()
+    for url in result["results"]:
+        parts = urlsplit(url)
+        if parts.scheme not in ("http", "https") or parts.netloc != base_parts.netloc:
+            continue
+        clean = parts._replace(fragment="").geturl()
+        if clean in seen:
+            continue
+        seen.add(clean)
+        candidates.append(clean)
+        if len(candidates) >= limit:
+            break
+    return candidates
+
+
+def _extract_crawl_candidates(body: str, base_url: str, limit: int = 5, use_sitemap: bool = True, use_katana: bool = False) -> list[str]:
+    """Pick up to `limit` same-origin page links, combining on-page links,
+    the sitemap, and (when installed) a real katana crawl. Sitemap/katana
+    candidates are tried first since they tend to surface pages a plain
+    <a href> scan misses entirely (orphaned pages, JS-only navigation)."""
+    if limit <= 0:
+        return []
+
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    def add_all(new_urls: list[str]):
+        for url in new_urls:
+            if url not in seen:
+                seen.add(url)
+                candidates.append(url)
+
+    if use_katana:
+        add_all(_extract_katana_candidates(base_url, limit=limit))
+    if len(candidates) < limit and use_sitemap:
+        add_all(_extract_sitemap_candidates(base_url, limit=limit - len(candidates)))
+
+    if len(candidates) < limit and body:
+        from urllib.parse import urlsplit
+
+        base_parts = urlsplit(base_url)
+        base_normalized = base_url.rstrip("/")
+        hrefs: list[str] = []
+        try:
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(body, "html.parser")
+            hrefs = [a.get("href") for a in soup.find_all("a", href=True)]
+        except Exception:
+            hrefs = re.findall(r'href=["\']([^"\']+)["\']', body, re.IGNORECASE)
+
+        for href in hrefs:
+            if not href or href.startswith(("#", "mailto:", "tel:", "javascript:")):
+                continue
+            absolute = urljoin(base_url, href)
+            parts = urlsplit(absolute)
+            if parts.scheme not in ("http", "https") or parts.netloc != base_parts.netloc:
+                continue
+            clean = parts._replace(fragment="").geturl()
+            if clean in seen or clean.rstrip("/") == base_normalized:
+                continue
+            seen.add(clean)
+            candidates.append(clean)
+            if len(candidates) >= limit:
+                break
+
+    return candidates[:limit]
+
+
 def _crawl_additional_pages(
     base_url: str,
     body: str,
     headers_to_send: dict,
     timeout: int,
     max_pages: int,
+    use_katana: bool = False,
 ) -> tuple[list[Detection], list[str]]:
     """Fetch up to `max_pages` extra same-origin pages and fingerprint each.
 
     Widens detection for stacks that only reveal themselves on specific
     pages (e.g. a checkout page's payment processor, a docs page's static
     site generator markers). Bounded, same-origin only, read-only GETs.
+    Candidates come from the sitemap and on-page links by default, plus a
+    real katana crawl when `use_katana` is set and katana is installed.
     """
     if max_pages <= 0:
         return [], []
-    candidates = _extract_crawl_candidates(body, base_url, limit=max_pages)
+    candidates = _extract_crawl_candidates(body, base_url, limit=max_pages, use_katana=use_katana)
     if not candidates:
         return [], []
 
@@ -917,6 +1086,46 @@ def _merge_crawl_and_favicon(
                 continue
             result.technologies.append(detection)
             existing_names.add(detection.name)
+
+
+def _run_js_intel(body: str, base_url: str, timeout: int, max_bundles: int) -> dict:
+    from core import js_intel
+    return js_intel.harvest(body, base_url, timeout=timeout, max_bundles=max_bundles)
+
+
+def _merge_js_intel(result: "ScanResult", js_intel_payload: Optional[dict]) -> None:
+    """Fold JS-bundle findings into `result` in place: store the recon
+    metadata (hydration markers, endpoints, redacted secret findings),
+    and re-run fingerprint matching against the bundle text so the
+    existing signature catalog gets a real shot at client-rendered stacks
+    it would otherwise never see in the static HTML alone."""
+    if not js_intel_payload:
+        return
+
+    bundle_text = js_intel_payload.pop("bundle_text", {}) or {}
+    result.enriched["js_intel"] = js_intel_payload
+
+    if not bundle_text:
+        return
+
+    existing_names = {tech.name for tech in result.technologies}
+    combined = "\n".join(bundle_text.values())[:1_500_000]  # cap total corpus fed to the matcher
+    bundle_detections = run_fingerprints({}, {}, combined, url=result.final_url)
+    # Unlike crawl-mode merging, we do NOT filter out low-confidence matches
+    # here: a JS bundle has no headers/meta to ever corroborate against, so
+    # the exact signal this feature exists to catch - a literal marker like
+    # `__reactFiber` or `react.production.min.js` in the minified source -
+    # is structurally incapable of scoring above "low" under the normal
+    # multi-signal confidence model, even though it's a strong, low-noise
+    # signal in this specific context. The result set is already bounded
+    # (a handful of same-page bundles, deduped by name against what's
+    # already detected), so the crawl-mode flooding problem doesn't apply.
+    for detection in bundle_detections:
+        if detection.name in existing_names:
+            continue
+        detection.evidence = f"[JS bundle] {detection.evidence}"
+        result.technologies.append(detection)
+        existing_names.add(detection.name)
 
 
 def _collect_external_tool_results(recon_results: dict) -> dict:
@@ -1089,6 +1298,7 @@ def serialize_scan_result(result: ScanResult) -> dict:
         "response_time_ms": result.response_time_ms,
         "server": result.server,
         "technologies": [detection.__dict__ for detection in result.technologies],
+        "waf": result.waf,
         "headers": result.headers,
         "dns": result.dns_records,
         "ssl": result.ssl_info,
@@ -1105,6 +1315,9 @@ def serialize_scan_result(result: ScanResult) -> dict:
         "plugins": result.enriched.get("plugins", {}) if result.enriched else {},
         "crawl": result.enriched.get("crawl", {}) if result.enriched else {},
         "external_tools": result.enriched.get("external_tools", {}) if result.enriched else {},
+        "js_intel": result.enriched.get("js_intel", {}) if result.enriched else {},
+        "security_grade": result.enriched.get("security_grade", {}) if result.enriched else {},
+        "cors_misconfig": result.enriched.get("cors_misconfig", []) if result.enriched else [],
         "notes": result.notes,
         "error": result.error,
         "cache_hit": result.cache_hit,
@@ -1290,6 +1503,9 @@ async def _async_scan_target(
     harvest_urls: bool = False,
     screenshot: bool = False,
     screenshot_dir: str = "/tmp/inoue-screenshots",
+    crawl_katana: bool = False,
+    js_intel: bool = False,
+    js_intel_bundles: int = 3,
 ) -> ScanResult:
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
@@ -1342,6 +1558,7 @@ async def _async_scan_target(
     result.headers = dict(response.headers)
     result.server = _header_value(result.headers, "server")
     cookies = {key: value for key, value in response.cookies.items()}
+    result.waf = detect_waf(result.headers, cookies)
     if plan.get("tech") or plan.get("smart") or plan.get("headers"):
         result.technologies = run_fingerprints(
             result.headers,
@@ -1366,15 +1583,22 @@ async def _async_scan_target(
     }
     if plan.get("headers"):
         result.enriched["headers"] = dict(result.headers)
+    result.enriched["security_grade"] = grade_security_headers(result.headers)
+    cors_findings = detect_cors_misconfig(result.headers)
+    if cors_findings:
+        result.enriched["cors_misconfig"] = cors_findings
 
     recon_results = {}
     tasks = []
     if plan.get("dns") and dns_enabled and hostname:
         tasks.append(("dns", lambda: _get_dns(hostname)))
+        tasks.append(("ptr", lambda: _get_ptr_records([result.ip] if result.ip else [])))
     if plan.get("ssl") and ssl_enabled and hostname and parsed.scheme == "https":
         tasks.append(("ssl", lambda: _get_ssl_info(hostname)))
     if plan.get("whois") and hostname:
         tasks.append(("whois", lambda: _get_whois(hostname)))
+        if result.ip:
+            tasks.append(("ip_whois", lambda: _get_ip_whois(result.ip)))
     if plan.get("mail") and hostname:
         tasks.append(("mail", lambda: _get_mail_records(hostname)))
     if plan.get("subdomains") and hostname:
@@ -1390,8 +1614,10 @@ async def _async_scan_target(
         tasks.append(("favicon", lambda: _get_favicon(result.final_url, response.text, timeout=max(1, min(3, timeout // 4)))))
     if crawl_pages > 0 and hostname:
         tasks.append(("crawl", lambda: _crawl_additional_pages(
-            result.final_url, response.text, headers_to_send, max(1, min(5, timeout)), crawl_pages,
+            result.final_url, response.text, headers_to_send, max(1, min(5, timeout)), crawl_pages, use_katana=crawl_katana,
         )))
+    if js_intel and hostname:
+        tasks.append(("js_intel", lambda: _run_js_intel(response.text, result.final_url, max(5, timeout), js_intel_bundles)))
     if active_subdomains and hostname:
         tasks.append(("ext_subdomains", lambda: external_tools.run_subfinder(hostname, timeout=max(10, timeout * 3))))
     if active_ports and hostname:
@@ -1411,8 +1637,14 @@ async def _async_scan_target(
             recon_results[label] = None if isinstance(value, Exception) else value
 
     result.dns_records = recon_results.get("dns") or {}
+    ptr_records = recon_results.get("ptr") or {}
+    if ptr_records:
+        result.dns_records["PTR"] = [f"{ip} -> {host}" for ip, host in ptr_records.items()]
     result.ssl_info = recon_results.get("ssl") or {}
     result.whois_info = recon_results.get("whois") or {}
+    ip_whois = recon_results.get("ip_whois")
+    if ip_whois:
+        result.whois_info["ip_whois"] = ip_whois
     result.whois_summary = summarize_whois_details(result.whois_info)
     result.mail_records = recon_results.get("mail") or []
     result.subdomains = recon_results.get("subdomains") or []
@@ -1423,6 +1655,7 @@ async def _async_scan_target(
     result.extra_intel.setdefault("directories", result.directories)
     crawl_detections, crawl_pages_scanned = recon_results.get("crawl") or ([], [])
     _merge_crawl_and_favicon(result, recon_results.get("favicon"), crawl_detections, crawl_pages_scanned)
+    _merge_js_intel(result, recon_results.get("js_intel"))
     external_results = _collect_external_tool_results(recon_results)
     if external_results:
         result.enriched["external_tools"] = external_results
@@ -1466,6 +1699,9 @@ async def scan_many(
     harvest_urls: bool = False,
     screenshot: bool = False,
     screenshot_dir: str = "/tmp/inoue-screenshots",
+    crawl_katana: bool = False,
+    js_intel: bool = False,
+    js_intel_bundles: int = 3,
 ) -> list[ScanResult]:
     """Scan multiple targets concurrently using one shared async HTTP client."""
     if not targets:
@@ -1514,7 +1750,8 @@ async def scan_many(
                 cve_min_severity, dns, ssl_check, api_key, progress,
                 allow_private_targets, crawl_pages,
                 active_subdomains, active_ports, nuclei_scan, nuclei_severity,
-                harvest_urls, screenshot, screenshot_dir,
+                harvest_urls, screenshot, screenshot_dir, crawl_katana,
+                js_intel, js_intel_bundles,
             )
             if cache and not result.error:
                 cache.set(target, cache_module, _serialize_scan_result(result))
@@ -1820,6 +2057,9 @@ def scan(
     harvest_urls: bool = False,
     screenshot: bool = False,
     screenshot_dir: str = "/tmp/inoue-screenshots",
+    crawl_katana: bool = False,
+    js_intel: bool = False,
+    js_intel_bundles: int = 3,
 ) -> ScanResult:
     def report(message: str):
         if progress:
@@ -1863,6 +2103,7 @@ def scan(
         report(f"response received {result.status_code}")
         parsed = urlparse(result.final_url)
         hostname = parsed.hostname or hostname
+        result.waf = detect_waf(resp_headers, cookies)
         if plan.get("tech") or plan.get("smart") or plan.get("headers"):
             result.technologies = run_fingerprints(
                 resp_headers,
@@ -1898,6 +2139,7 @@ def scan(
             report(f"response received {result.status_code}")
             parsed = urlparse(result.final_url)
             hostname = parsed.hostname or hostname
+            result.waf = detect_waf(resp_headers, cookies)
             if plan.get("tech") or plan.get("smart") or plan.get("headers"):
                 result.technologies = run_fingerprints(
                     resp_headers,
@@ -1932,16 +2174,23 @@ def scan(
 
     if plan.get("headers"):
         result.enriched["headers"] = dict(result.headers)
+    result.enriched["security_grade"] = grade_security_headers(result.headers)
+    cors_findings = detect_cors_misconfig(result.headers)
+    if cors_findings:
+        result.enriched["cors_misconfig"] = cors_findings
 
     recon_results = {}
     tasks = []
     if plan.get("dns") and dns and hostname:
         tasks.append(("dns", lambda: _get_dns(hostname), 5))
+        tasks.append(("ptr", lambda: _get_ptr_records([result.ip] if result.ip else []), 5))
     if plan.get("ssl") and hostname and ((ssl_check and parsed.scheme == "https") or result.final_url.startswith("https")):
         final_parsed = urlparse(result.final_url)
         tasks.append(("ssl", lambda: _get_ssl_info(final_parsed.hostname or hostname), 5))
     if plan.get("whois") and hostname:
         tasks.append(("whois", lambda: _get_whois(hostname), 5))
+        if result.ip:
+            tasks.append(("ip_whois", lambda: _get_ip_whois(result.ip), 5))
     if plan.get("mail") and hostname:
         tasks.append(("mail", lambda: _get_mail_records(hostname), 5))
     if plan.get("subdomains") and hostname:
@@ -1957,8 +2206,12 @@ def scan(
         tasks.append(("favicon", lambda: _get_favicon(result.final_url, body, timeout=max(1, min(3, timeout // 4))), 5))
     if crawl_pages > 0 and hostname:
         tasks.append(("crawl", lambda: _crawl_additional_pages(
-            result.final_url, body, headers_to_send, max(1, min(5, timeout)), crawl_pages,
-        ), max(10, timeout * 2)))
+            result.final_url, body, headers_to_send, max(1, min(5, timeout)), crawl_pages, use_katana=crawl_katana,
+        ), max(30 if crawl_katana else 10, timeout * (4 if crawl_katana else 2))))
+    if js_intel and hostname:
+        js_timeout = max(5, timeout)
+        # harvest() fetches up to js_intel_bundles scripts sequentially inside one task.
+        tasks.append(("js_intel", lambda: _run_js_intel(body, result.final_url, js_timeout, js_intel_bundles), (js_timeout * js_intel_bundles) + 10))
     if active_subdomains and hostname:
         ext_timeout = max(10, timeout * 3)
         tasks.append(("ext_subdomains", lambda: external_tools.run_subfinder(hostname, timeout=ext_timeout), ext_timeout + 5))
@@ -1999,12 +2252,18 @@ def scan(
 
     if plan.get("dns") and dns and hostname:
         result.dns_records = recon_results.get("dns") or {}
+        ptr_records = recon_results.get("ptr") or {}
+        if ptr_records:
+            result.dns_records["PTR"] = [f"{ip} -> {host}" for ip, host in ptr_records.items()]
 
     if plan.get("ssl") and hostname and ((ssl_check and parsed.scheme == "https") or result.final_url.startswith("https")):
         result.ssl_info = recon_results.get("ssl") or {}
 
     if plan.get("whois") and hostname:
         result.whois_info = recon_results.get("whois") or {}
+        ip_whois = recon_results.get("ip_whois")
+        if ip_whois:
+            result.whois_info["ip_whois"] = ip_whois
         result.whois_summary = summarize_whois_details(result.whois_info)
 
     if plan.get("mail") and hostname:
@@ -2024,6 +2283,7 @@ def scan(
 
     crawl_detections, crawl_pages_scanned = recon_results.get("crawl") or ([], [])
     _merge_crawl_and_favicon(result, recon_results.get("favicon"), crawl_detections, crawl_pages_scanned)
+    _merge_js_intel(result, recon_results.get("js_intel"))
     external_results = _collect_external_tool_results(recon_results)
     if external_results:
         result.enriched["external_tools"] = external_results

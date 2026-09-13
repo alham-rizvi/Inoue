@@ -105,6 +105,29 @@ def render_result(result: ScanResult, verbose: bool = False, evidence: bool = Fa
         console.print(f"  [dim]server[/dim]  {result.server}")
     console.print()
 
+    if result.waf:
+        console.print("  [dim]── WAF / CDN ─────────────────────────[/dim]")
+        for entry in result.waf:
+            console.print(f"  [yellow]{entry['category']}[/yellow]  {entry['name']} [dim]({entry['evidence']})[/dim]")
+        console.print()
+
+    security_grade = result.enriched.get("security_grade")
+    if security_grade:
+        score = security_grade["score"]
+        color = "green" if score >= 80 else "yellow" if score >= 50 else "red"
+        console.print(f"  [dim]── security header grade: [/dim][{color}]{score}/100[/{color}]")
+        for entry in security_grade["missing"]:
+            console.print(f"  [red]missing[/red] {entry['header']}")
+        console.print()
+
+    cors_findings = result.enriched.get("cors_misconfig")
+    if cors_findings:
+        console.print("  [dim]── CORS ──────────────────────────────[/dim]")
+        for finding in cors_findings:
+            console.print(f"  [red]{finding['issue']}[/red]")
+            console.print(f"    [dim]{finding['evidence']}[/dim]")
+        console.print()
+
     service_summary = build_service_summary(result)
     if service_summary:
         by_category = defaultdict(list)
@@ -363,6 +386,7 @@ def result_to_dict(result: ScanResult) -> dict:
             }
             for technology in result.technologies
         ],
+        "waf": result.waf,
         "dns": result.dns_records,
         "ssl": result.ssl_info,
         "tls_fingerprint": result.tls_fingerprint,
@@ -373,6 +397,9 @@ def result_to_dict(result: ScanResult) -> dict:
         "open_ports": result.open_ports,
         "directories": result.directories,
         "extra_intel": result.extra_intel,
+        "js_intel": result.enriched.get("js_intel", {}),
+        "security_grade": result.enriched.get("security_grade", {}),
+        "cors_misconfig": result.enriched.get("cors_misconfig", []),
         "recon": result.enriched.get("recon", []) if result.enriched else [],
         "service_hints": result.enriched.get("service_hints", []) if result.enriched else [],
         "plugins": result.enriched.get("plugins", {}) if result.enriched else {},
@@ -678,6 +705,9 @@ def main(
     cve_min_severity: Optional[str] = typer.Option(None, "--cve-min-severity", help="Minimum CVE severity: low, medium, high, or critical"),
     fail_on_cve: bool = typer.Option(False, "--fail-on-cve", help="Exit with code 2 when CVEs are found"),
     crawl: int = typer.Option(0, "--crawl", help="Fetch up to N additional same-origin pages to widen tech detection (0 disables)"),
+    crawl_katana: bool = typer.Option(False, "--crawl-katana", help="Use katana (if installed) as an extra crawl-candidate source alongside sitemap.xml and on-page links"),
+    js_intel: bool = typer.Option(False, "--js-intel", help="Fetch same-origin JS bundles and mine them for endpoints, hydration payloads, redacted secret patterns, and SPA framework signatures the static HTML misses"),
+    js_intel_bundles: int = typer.Option(3, "--js-intel-bundles", help="Max number of JS bundles to fetch and analyze with --js-intel"),
     save_history: bool = typer.Option(False, "--save-history", help="Append this scan's result to the local history DB for later 'inoue history' timelines"),
     history_path: Optional[str] = typer.Option(None, "--history-path", help="SQLite history DB path (default ~/.cache/inoue/history.db)"),
     active_subdomains: bool = typer.Option(False, "--active-subdomains", help="Run subfinder for active subdomain enumeration (requires subfinder on PATH)"),
@@ -904,6 +934,9 @@ def main(
                 plugin_dirs=[plugin_dir] if plugin_dir else None,
                 cve_min_severity=cve_min_severity,
                 crawl_pages=crawl,
+                crawl_katana=crawl_katana,
+                js_intel=js_intel,
+                js_intel_bundles=js_intel_bundles,
                 active_subdomains=active_subdomains,
                 active_ports=active_ports,
                 nuclei_scan=nuclei_scan,
@@ -930,6 +963,9 @@ def main(
                         cve_min_severity=cve_min_severity,
                         progress=make_progress_callback(t, tasks_map[t]),
                         crawl_pages=crawl,
+                        crawl_katana=crawl_katana,
+                        js_intel=js_intel,
+                        js_intel_bundles=js_intel_bundles,
                         active_subdomains=active_subdomains,
                         active_ports=active_ports,
                         nuclei_scan=nuclei_scan,
