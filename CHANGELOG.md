@@ -1,7 +1,6 @@
 # Changelog
 
 ## Unreleased
-
 - Added a curated web-server dataset covering additional application servers,
   reverse proxies, and forwarding proxies with header-based version detection.
 - Added regression coverage for Kestrel, Node.js HTTP, and server-family catalog
@@ -11,6 +10,12 @@
   standard, or wide table layouts through TOML configuration.
 - Added the repository wiki guide for verification, Docker, MCP, terminal
   themes, and trusted PyPI publishing setup.
+
+## 1.5.1 - 2026-09-14
+### Added
+- Optional external reconnaissance integrations for subdomains, ports, nuclei, URL harvesting, and screenshots.
+- Security-header grading, CORS checks, expanded passive WAF/CDN detection, JavaScript bundle intelligence, PTR/IP-WHOIS enrichment, and optional Katana crawling.
+- Recursive extension release packaging so nested assets are included in Chrome and Firefox archives.
 
 ## 1.1.2 - 2026-09-10
 

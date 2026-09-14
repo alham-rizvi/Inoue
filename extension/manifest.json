@@ -1,9 +1,13 @@
 {
   "manifest_version": 3,
   "name": "Inoue Web Stack Detector",
-  "version": "1.0.0",
+  "version": "1.5.1",
   "description": "Detect the technology stack exposed by the active web page using a local Inoue Python backend.",
-  "permissions": ["activeTab", "tabs", "storage"],
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "storage"
+  ],
   "host_permissions": [
     "http://127.0.0.1:8000/*",
     "http://localhost:8000/*"
@@ -23,7 +27,9 @@
     "gecko": {
       "id": "inoue-web-stack-detector@alhamrizvi.in",
       "data_collection_permissions": {
-        "required": ["none"]
+        "required": [
+          "none"
+        ]
       }
     }
   }
