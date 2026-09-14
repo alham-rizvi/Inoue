@@ -13,9 +13,9 @@ DIST = ROOT / "dist" / "extension"
 def build(browser: str, manifest: dict) -> Path:
     archive = DIST / f"inoue-web-stack-detector-{browser}-{manifest['version']}.zip"
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
-        for path in sorted(SOURCE.iterdir()):
+        for path in sorted(SOURCE.rglob("*")):
             if path.is_file():
-                bundle.write(path, path.name)
+                bundle.write(path, path.relative_to(SOURCE))
     return archive
 
 

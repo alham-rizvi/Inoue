@@ -37,6 +37,45 @@ class ExtensionReleaseTests(unittest.TestCase):
         self.assertIn("chrome", builder)
         self.assertIn("firefox", builder)
 
+    def test_built_archive_includes_every_source_file_including_subdirectories(self):
+        """Regression guard: an earlier version of build_extension.py only
+        iterated the top level of extension/ (path.is_file() on
+        SOURCE.iterdir()), which silently dropped assets/inoue-logo.svg -
+        referenced by popup.html - from every release archive. This runs
+        the real builder against the real extension/ source and confirms
+        every file that exists on disk actually makes it into the zip."""
+        import importlib.util
+        import tempfile
+        import zipfile
+
+        spec = importlib.util.spec_from_file_location(
+            "build_extension", ROOT / "scripts" / "build_extension.py"
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            module.DIST = Path(tmpdir)
+            manifest = json.loads((EXTENSION / "manifest.json").read_text(encoding="utf-8"))
+            archive_path = module.build("chrome", manifest)
+
+            expected = {
+                str(p.relative_to(EXTENSION))
+                for p in EXTENSION.rglob("*")
+                if p.is_file()
+            }
+            with zipfile.ZipFile(archive_path) as archive:
+                actual = set(archive.namelist())
+
+            self.assertEqual(expected, actual)
+            self.assertIn("assets/inoue-logo.svg", actual)
+
+            # popup.html references this path directly - confirm it's not
+            # just present in the zip but findable at the exact path the
+            # extension expects when it's unpacked/loaded.
+            popup_html = (EXTENSION / "popup.html").read_text(encoding="utf-8")
+            self.assertIn("assets/inoue-logo.svg", popup_html)
+
 
 if __name__ == "__main__":
     unittest.main()
