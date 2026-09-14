@@ -29,6 +29,7 @@ except ImportError:  # pragma: no cover - optional dependency
 import httpx
 from core.cache import ScanCache
 from core.cve import correlate_cves, load_cve_dataset
+from core.scope import RequestBudget, ScopeError, ScopeMatcher
 from core.waf import detect_waf
 from core.security_grade import detect_cors_misconfig, grade_security_headers
 
@@ -2311,16 +2312,16 @@ def scan(
         report(f"enqueueing {len(tasks)} recon tasks")
 
     if progress and tasks:
-        for label, _ in tasks:
-            report(f"running {label} module")
+        for task in tasks:
+            report(f"running {task[0]} module")
 
     if tasks:
         with ThreadPoolExecutor(max_workers=min(6, len(tasks))) as executor:
-            futures = {executor.submit(fn): name for name, fn in tasks}
+            futures = {executor.submit(task[1]): (task[0], task[2] if len(task) > 2 else 3) for task in tasks}
             for future in as_completed(futures):
-                label = futures[future]
+                label, wait_seconds = futures[future]
                 try:
-                    recon_results[label] = future.result(timeout=3)
+                    recon_results[label] = future.result(timeout=wait_seconds)
                 except Exception:
                     recon_results[label] = None
 
