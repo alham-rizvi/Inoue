@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+
+## 1.5.3 - 2026-09-14
+### Added
 - Added a curated web-server dataset covering additional application servers,
   reverse proxies, and forwarding proxies with header-based version detection.
 - Added regression coverage for Kestrel, Node.js HTTP, and server-family catalog

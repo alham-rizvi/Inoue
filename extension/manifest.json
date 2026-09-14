@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Inoue Web Stack Detector",
-  "version": "1.5.1",
+  "version": "1.5.3",
   "description": "Detect the technology stack exposed by the active web page using a local Inoue Python backend.",
   "permissions": [
     "activeTab",
