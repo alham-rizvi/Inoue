@@ -27,6 +27,7 @@ except ImportError:  # pragma: no cover - optional dependency
     whois = None
 
 import httpx
+from core import external_tools
 from core.cache import ScanCache
 from core.cve import correlate_cves, load_cve_dataset
 from core.scope import RequestBudget, ScopeError, ScopeMatcher
