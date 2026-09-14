@@ -44,6 +44,8 @@ class ScanRequest(BaseModel):
     harvest_urls: bool = Field(False, description="Collect historical + live URLs via gau, waybackurls, and katana")
     screenshot: bool = Field(False, description="Capture a screenshot via gowitness (requires gowitness + Chrome/Chromium)")
     screenshot_dir: str = Field("/tmp/inoue-screenshots", description="Directory to write gowitness screenshots to")
+    js_intel: bool = Field(False, description="Fetch same-origin JS bundles and mine them for endpoints, hydration payloads, redacted secret patterns, and SPA framework signatures")
+    js_intel_bundles: int = Field(3, ge=1, le=10, description="Max number of JS bundles to fetch and analyze with js_intel")
 
 
 class BatchRequest(BaseModel):
@@ -63,6 +65,8 @@ class BatchRequest(BaseModel):
     harvest_urls: bool = Field(False, description="Collect historical + live URLs via gau, waybackurls, and katana per target")
     screenshot: bool = Field(False, description="Capture a screenshot per target via gowitness (requires gowitness + Chrome/Chromium)")
     screenshot_dir: str = Field("/tmp/inoue-screenshots", description="Directory to write gowitness screenshots to")
+    js_intel: bool = Field(False, description="Fetch same-origin JS bundles and mine them for endpoints, hydration payloads, redacted secret patterns, and SPA framework signatures")
+    js_intel_bundles: int = Field(3, ge=1, le=10, description="Max number of JS bundles to fetch and analyze with js_intel")
 
 
 def validate_public_target(target: str, allow_private: bool = False) -> None:
@@ -140,6 +144,8 @@ def create_app() -> Optional[FastAPI]:
             harvest_urls=payload.harvest_urls,
             screenshot=payload.screenshot,
             screenshot_dir=payload.screenshot_dir,
+            js_intel=payload.js_intel,
+            js_intel_bundles=payload.js_intel_bundles,
         )
         if payload.save_history and not result.error:
             from core.history import DEFAULT_HISTORY_PATH, record_snapshot
@@ -171,6 +177,8 @@ def create_app() -> Optional[FastAPI]:
             harvest_urls=payload.harvest_urls,
             screenshot=payload.screenshot,
             screenshot_dir=payload.screenshot_dir,
+            js_intel=payload.js_intel,
+            js_intel_bundles=payload.js_intel_bundles,
         )
         if payload.save_history:
             from core.history import DEFAULT_HISTORY_PATH, record_snapshot

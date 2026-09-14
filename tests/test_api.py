@@ -52,6 +52,8 @@ class ApiBackendTests(unittest.TestCase):
                 harvest_urls=False,
                 screenshot=False,
                 screenshot_dir="/tmp/inoue-screenshots",
+                js_intel=False,
+                js_intel_bundles=3,
             )
             return response
 
@@ -93,6 +95,8 @@ class ApiBackendTests(unittest.TestCase):
             harvest_urls=False,
             screenshot=False,
             screenshot_dir="/tmp/inoue-screenshots",
+            js_intel=False,
+            js_intel_bundles=3,
         )
         self.assertEqual(payload["technologies"][0]["name"], "Nginx")
 

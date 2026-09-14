@@ -28,7 +28,7 @@ It is useful for recon, CTF/HTB, bug bounty, internal network review, and genera
 
 Maintained by **Alham Rizvi**.
 
-## Version 1.1.2
+## Version 1.5.1
 
 The current release adds a safer release-ready recon workflow while keeping scanning read-only:
 
@@ -142,14 +142,14 @@ Optional FastAPI endpoints for health, signature, single-target, and batch scans
 ## Install
 
 ```bash
-python -m pip install inoue==1.1.2
+python -m pip install inoue==1.5.1
 inoue --help
 ```
 
 Install the optional API dependencies with:
 
 ```bash
-python -m pip install "inoue[api]==1.1.2"
+python -m pip install "inoue[api]==1.5.1"
 ```
 
 Install optional MCP support with:
