@@ -1735,6 +1735,10 @@ async def _async_scan_target(
         external = _enrich_with_external_services(hostname, [tech.name for tech in result.technologies], api_key)
         if external:
             result.enriched.update(external)
+    from core.eol import check_technologies
+    eol_findings = check_technologies(result.technologies)
+    if eol_findings:
+        result.enriched["eol_technologies"] = eol_findings
     from core.plugins import run_plugins
     plugin_results = run_plugins(result, plugin_dirs, progress)
     if plugin_results:
@@ -2413,6 +2417,10 @@ def scan(
         result.extra_intel.setdefault("company", {})
         result.extra_intel["company"].update(company_intel)
         result.enriched.setdefault("company", company_intel)
+    from core.eol import check_technologies
+    eol_findings = check_technologies(result.technologies)
+    if eol_findings:
+        result.enriched["eol_technologies"] = eol_findings
     result.enriched["risk"] = score_result(result)
 
     from core.plugins import run_plugins

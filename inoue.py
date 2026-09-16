@@ -398,6 +398,7 @@ def result_to_dict(result: ScanResult) -> dict:
         "directories": result.directories,
         "extra_intel": result.extra_intel,
         "js_intel": result.enriched.get("js_intel", {}),
+        "eol_technologies": result.enriched.get("eol_technologies", []),
         "security_grade": result.enriched.get("security_grade", {}),
         "cors_misconfig": result.enriched.get("cors_misconfig", []),
         "recon": result.enriched.get("recon", []) if result.enriched else [],

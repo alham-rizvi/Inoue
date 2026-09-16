@@ -37,6 +37,7 @@ _FINDING_WEIGHTS = {
     "weak_security_headers": 10,
     "openapi_spec_exposed": 8,
     "medium_cve": 8,
+    "eol_technology": 15,
     "many_open_ports": 5,
 }
 
@@ -79,6 +80,13 @@ def score_result(result) -> dict[str, Any]:
         add("high_cve", f"{cve_counts['high']} high-severity CVE(s)")
     if cve_counts["medium"]:
         add("medium_cve", f"{cve_counts['medium']} medium-severity CVE(s)")
+    # --- end-of-life technologies --------------------------------------------
+    eol_technologies = enriched.get("eol_technologies") or []
+    for technology in eol_technologies:
+        add(
+            "eol_technology",
+            f"{technology.get('name')} {technology.get('version')} reached end of life on {technology.get('eol_date')}",
+        )
 
     # --- exposed sensitive files ---------------------------------------------
     exposure = enriched.get("exposure") or []
