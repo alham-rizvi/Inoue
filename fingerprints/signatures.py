@@ -847,6 +847,26 @@ for name, signature in WEB_SERVER_SIGNATURES.items():
         SIGNATURES[name] = signature
 
 
+from fingerprints.modern_catalog import MODERN_SIGNATURES
+
+for name, signature in MODERN_SIGNATURES.items():
+    if name in SIGNATURES:
+        current = SIGNATURES[name]
+        for key, value in signature.items():
+            if key in {"html", "headers", "meta", "scripts", "cookies", "paths"}:
+                existing = current.get(key)
+                if isinstance(existing, list) and isinstance(value, list):
+                    current[key] = existing + value
+                elif isinstance(existing, dict) and isinstance(value, dict):
+                    current[key] = {**existing, **value}
+                else:
+                    current[key] = value
+            else:
+                current[key] = value
+    else:
+        SIGNATURES[name] = signature
+
+
 def _compile_pattern(value: Any) -> Any:
     if isinstance(value, str):
         try:

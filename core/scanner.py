@@ -205,7 +205,12 @@ def _match_html(sig: dict, body: str) -> tuple[bool, Optional[str], str]:
         m = pattern.search(body)
         if m:
             snippet = body[max(0, m.start()-20):m.end()+20].strip().replace("\n", " ")
-            evidence_text = body[max(0, m.start() - 120):m.end() + 240]
+            tag_start = body.rfind("<", 0, m.start())
+            tag_end = body.find(">", m.end())
+            if tag_start >= 0 and tag_end >= 0 and "<" not in body[tag_start + 1:m.start()]:
+                evidence_text = body[tag_start:tag_end + 1]
+            else:
+                evidence_text = body[max(0, m.start() - 80):m.end() + 80]
             version = _extract_version(pattern.pattern if hasattr(pattern, "pattern") else str(pattern), evidence_text)
             version = version or _extract_deep_version(evidence_text)
             return True, version, f"HTML: …{snippet[:60]}…"
