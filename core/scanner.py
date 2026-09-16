@@ -33,6 +33,11 @@ from core.cve import correlate_cves, load_cve_dataset
 from core.scope import RequestBudget, ScopeError, ScopeMatcher
 from core.waf import detect_waf
 from core.security_grade import detect_cors_misconfig, grade_security_headers
+from core.api_discovery import discover as discover_api
+from core.email_security import analyze as analyze_email_security
+from core.http_posture import analyze as analyze_http_posture
+from core.risk import score_result
+from core.takeover import check_takeover as check_takeover_host
 
 from fingerprints.signatures import (
     COMPILED_SIGNATURES,
@@ -1557,6 +1562,10 @@ async def _async_scan_target(
     crawl_katana: bool = False,
     js_intel: bool = False,
     js_intel_bundles: int = 3,
+    check_takeover: bool = False,
+    api_discovery: bool = False,
+    email_security: bool = False,
+    http_methods: bool = False,
 ) -> ScanResult:
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
@@ -1764,6 +1773,10 @@ async def scan_many(
     crawl_katana: bool = False,
     js_intel: bool = False,
     js_intel_bundles: int = 3,
+    check_takeover: bool = False,
+    api_discovery: bool = False,
+    email_security: bool = False,
+    http_methods: bool = False,
 ) -> list[ScanResult]:
     """Scan multiple targets concurrently using one shared async HTTP client."""
     if not targets:
@@ -1813,6 +1826,7 @@ async def scan_many(
                 active_subdomains, active_ports, nuclei_scan, nuclei_severity,
                 harvest_urls, screenshot, screenshot_dir, crawl_katana,
                 js_intel, js_intel_bundles,
+                check_takeover, api_discovery, email_security, http_methods,
             )
             if cache and not result.error:
                 cache.set(target, cache_module, _serialize_scan_result(result))
@@ -2125,6 +2139,10 @@ def scan(
     crawl_katana: bool = False,
     js_intel: bool = False,
     js_intel_bundles: int = 3,
+    check_takeover: bool = False,
+    api_discovery: bool = False,
+    email_security: bool = False,
+    http_methods: bool = False,
 ) -> ScanResult:
     def report(message: str):
         if progress:
@@ -2303,6 +2321,14 @@ def scan(
         js_timeout = max(5, timeout)
         # harvest() fetches up to js_intel_bundles scripts sequentially inside one task.
         tasks.append(("js_intel", lambda: _run_js_intel(body, result.final_url, js_timeout, js_intel_bundles), (js_timeout * js_intel_bundles) + 10))
+    if check_takeover and hostname:
+        tasks.append(("takeover", lambda: check_takeover_host(hostname, timeout=max(3, timeout)), max(10, timeout * 2)))
+    if api_discovery and hostname:
+        tasks.append(("api_discovery", lambda: discover_api(result.final_url, timeout=max(3, timeout)), max(10, timeout * 4)))
+    if email_security and hostname:
+        tasks.append(("email_security", lambda: analyze_email_security(hostname, timeout=max(2, timeout)), max(10, timeout * 8)))
+    if http_methods:
+        tasks.append(("http_posture", lambda: analyze_http_posture(result.headers, result.final_url, check_methods=True, timeout=max(3, timeout)), max(10, timeout * 2)))
     if active_subdomains and hostname:
         tasks.append(("ext_subdomains", lambda: external_tools.run_subfinder(hostname, timeout=max(10, timeout * 3))))
     if active_ports and hostname:
@@ -2365,6 +2391,14 @@ def scan(
     crawl_detections, crawl_pages_scanned = recon_results.get("crawl") or ([], [])
     _merge_crawl_and_favicon(result, recon_results.get("favicon"), crawl_detections, crawl_pages_scanned)
     _merge_js_intel(result, recon_results.get("js_intel"))
+    if recon_results.get("takeover"):
+        result.enriched["takeover_candidates"] = recon_results["takeover"]
+    if recon_results.get("api_discovery"):
+        result.enriched["api_surface"] = recon_results["api_discovery"]
+    if recon_results.get("email_security"):
+        result.enriched["email_security"] = recon_results["email_security"]
+    if recon_results.get("http_posture"):
+        result.enriched["http_posture"] = recon_results["http_posture"]
     external_results = _collect_external_tool_results(recon_results)
     if external_results:
         result.enriched["external_tools"] = external_results
@@ -2379,6 +2413,7 @@ def scan(
         result.extra_intel.setdefault("company", {})
         result.extra_intel["company"].update(company_intel)
         result.enriched.setdefault("company", company_intel)
+    result.enriched["risk"] = score_result(result)
 
     from core.plugins import run_plugins
     plugin_results = run_plugins(result, plugin_dirs, progress)

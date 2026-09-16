@@ -715,6 +715,10 @@ def main(
     crawl_katana: bool = typer.Option(False, "--crawl-katana", help="Use katana (if installed) as an extra crawl-candidate source alongside sitemap.xml and on-page links"),
     js_intel: bool = typer.Option(False, "--js-intel", help="Fetch same-origin JS bundles and mine them for endpoints, hydration payloads, redacted secret patterns, and SPA framework signatures the static HTML misses"),
     js_intel_bundles: int = typer.Option(3, "--js-intel-bundles", help="Max number of JS bundles to fetch and analyze with --js-intel"),
+    check_takeover: bool = typer.Option(False, "--check-takeover", help="Check discovered hosts for read-only subdomain-takeover candidates"),
+    api_discovery: bool = typer.Option(False, "--api-discovery", help="Probe conventional API documentation and GraphQL paths"),
+    email_security: bool = typer.Option(False, "--email-security", help="Analyze SPF, DMARC, DKIM, and MTA-STS posture"),
+    http_methods: bool = typer.Option(False, "--http-methods", help="Check allowed HTTP methods with one OPTIONS request"),
     api_surface: bool = typer.Option(False, "--api-surface", help="Check conventional API paths"),
     exposure: bool = typer.Option(False, "--exposure", help="Check bounded sensitive-file paths"),
     export_params: Optional[str] = typer.Option(None, "--export-params", help="Write mined JS parameter names to FILE"),
@@ -851,7 +855,7 @@ def main(
             console.print("[yellow]TLS fingerprinting unavailable[/yellow]: optional TLS tooling is not installed; skipping best-effort metadata capture.")
             tls_fingerprint = False
 
-    if any([service, headers, dns, ssl, whois, subdomains, mail, ports, extra, fast, full_recon, all_modules, smart, active, passive, company, cve, waf, waf_probe, js_intel, api_surface, exposure, active_subdomains, active_ports, nuclei_scan, harvest_urls, screenshot]) and modules is None:
+    if any([service, headers, dns, ssl, whois, subdomains, mail, ports, extra, fast, full_recon, all_modules, smart, active, passive, company, cve, waf, waf_probe, js_intel, api_surface, exposure, active_subdomains, active_ports, nuclei_scan, harvest_urls, screenshot, check_takeover, api_discovery, email_security, http_methods]) and modules is None:
         modules = []
     if modules is not None:
         modules = [m.lower() for m in modules]
@@ -957,6 +961,10 @@ def main(
                 crawl_katana=crawl_katana,
                 js_intel=js_intel,
                 js_intel_bundles=js_intel_bundles,
+                check_takeover=check_takeover,
+                api_discovery=api_discovery,
+                email_security=email_security,
+                http_methods=http_methods,
                 active_subdomains=active_subdomains,
                 active_ports=active_ports,
                 nuclei_scan=nuclei_scan,
@@ -986,6 +994,10 @@ def main(
                         crawl_katana=crawl_katana,
                         js_intel=js_intel,
                         js_intel_bundles=js_intel_bundles,
+                check_takeover=check_takeover,
+                api_discovery=api_discovery,
+                email_security=email_security,
+                http_methods=http_methods,
                         active_subdomains=active_subdomains,
                         active_ports=active_ports,
                         nuclei_scan=nuclei_scan,
