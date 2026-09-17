@@ -1,8 +1,10 @@
 name: publish-package
 
+
 on:
   release:
     types: [published]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -12,10 +14,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out release tag
+      - name: Check out release tag or selected ref
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ github.event.release.tag_name || github.ref }}
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -28,11 +30,12 @@ jobs:
       - name: Upload package artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: inoue-${{ github.event.release.tag_name }}
+          name: inoue-${{ github.event.release.tag_name || github.ref_name }}
           path: dist/
 
   publish:
     needs: build
+    if: ${{ github.event_name == 'release' && vars.PYPI_TRUSTED_PUBLISHER_CONFIGURED == 'true' }}
     runs-on: ubuntu-latest
     environment:
       name: pypi
@@ -45,3 +48,13 @@ jobs:
           path: dist/
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  publish-not-configured:
+    needs: build
+    if: ${{ github.event_name == 'release' && vars.PYPI_TRUSTED_PUBLISHER_CONFIGURED != 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Explain skipped PyPI upload
+        run: |
+          echo "Package build succeeded, but PyPI upload was skipped."
+          echo "Configure a PyPI Trusted Publisher for alham-rizvi/Inoue and set repository variable PYPI_TRUSTED_PUBLISHER_CONFIGURED=true to enable uploads."
