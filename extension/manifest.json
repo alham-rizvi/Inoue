@@ -18,7 +18,13 @@
   ],
   "action": {
     "default_title": "Detect web stack",
-    "default_popup": "popup.html"
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "assets/icon-16.png",
+      "32": "assets/icon-32.png",
+      "48": "assets/icon-48.png",
+      "128": "assets/icon-128.png"
+    }
   },
   "background": {
     "service_worker": "background.js"
@@ -32,5 +38,11 @@
         ]
       }
     }
+  },
+  "icons": {
+    "16": "assets/icon-16.png",
+    "32": "assets/icon-32.png",
+    "48": "assets/icon-48.png",
+    "128": "assets/icon-128.png"
   }
 }
