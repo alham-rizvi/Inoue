@@ -9,6 +9,15 @@ sslyze>=6.0.0
 python-nmap>=0.7.1
 tomli>=2.0; python_version < "3.11"
 
+# Required to run the local API backend (api/main.py) that both the
+# browser extension and any external MCP-style client talk to. Not
+# needed for the plain CLI, but installed by default here since the
+# extension's README just says "run uvicorn api.main:app" - without
+# these, that command fails with a confusing ModuleNotFoundError before
+# the extension ever gets a chance to connect.
+fastapi>=0.111
+uvicorn>=0.30
+
 # Optional: enables Shodan-style mmh3 favicon hashing (core/favicon.py).
 # md5 favicon hashing works fine without it.
 mmh3>=4.0

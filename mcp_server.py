@@ -118,7 +118,6 @@ def scan_target(target: str, modules: list[str] | None = None, timeout: int = 10
         "response_time_ms": result.response_time_ms,
         "technologies": [technology.__dict__ for technology in result.technologies],
         "waf": result.waf,
-        "js_intel": result.js_intel,
         "notes": result.notes,
         "error": result.error,
     }
@@ -158,7 +157,9 @@ def get_scan_history(target: str, limit: int = 10) -> list[dict[str, Any]]:
 
 
 def check_technology_eol(name: str, version: str) -> dict[str, Any]:
-    """Check a technology/version against Inoue's static EOL table."""
+    """Check a technology+version against Inoue's static, verified EOL
+    table. Returns {"checked": False} for anything not in the table -
+    absence never means "not EOL", only "not checked"."""
     from core.eol import check_eol
     result = check_eol(name, version)
     if result is None:
@@ -201,7 +202,7 @@ if MCPServerBase is not None:  # pragma: no cover - exercised by MCP clients
 
     @mcp.tool()
     def check_eol_tool(name: str, version: str) -> str:
-        """Check a technology name and version against Inoue's static end-of-life table. No network requests."""
+        """Check a technology name and version against Inoue's static, verified end-of-life table. No network requests."""
         return json.dumps(check_technology_eol(name, version), sort_keys=True)
 else:
     mcp = None

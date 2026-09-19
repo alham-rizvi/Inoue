@@ -54,6 +54,11 @@ class ApiBackendTests(unittest.TestCase):
                 screenshot_dir="/tmp/inoue-screenshots",
                 js_intel=False,
                 js_intel_bundles=3,
+                check_takeover=False,
+                api_discovery=False,
+                email_security=False,
+                http_methods=False,
+                scope_file=None,
             )
             return response
 
@@ -97,6 +102,11 @@ class ApiBackendTests(unittest.TestCase):
             screenshot_dir="/tmp/inoue-screenshots",
             js_intel=False,
             js_intel_bundles=3,
+            check_takeover=False,
+            api_discovery=False,
+            email_security=False,
+            http_methods=False,
+            scope_file=None,
         )
         self.assertEqual(payload["technologies"][0]["name"], "Nginx")
 

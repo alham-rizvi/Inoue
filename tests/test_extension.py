@@ -40,7 +40,7 @@ class ExtensionReleaseTests(unittest.TestCase):
     def test_built_archive_includes_every_source_file_including_subdirectories(self):
         """Regression guard: an earlier version of build_extension.py only
         iterated the top level of extension/ (path.is_file() on
-        SOURCE.iterdir()), which silently dropped assets/io.svg -
+        SOURCE.iterdir()), which silently dropped assets/inoue-logo.svg -
         referenced by popup.html - from every release archive. This runs
         the real builder against the real extension/ source and confirms
         every file that exists on disk actually makes it into the zip."""
@@ -68,13 +68,13 @@ class ExtensionReleaseTests(unittest.TestCase):
                 actual = set(archive.namelist())
 
             self.assertEqual(expected, actual)
-            self.assertIn("assets/io.svg", actual)
+            self.assertIn("assets/inoue-logo.svg", actual)
 
             # popup.html references this path directly - confirm it's not
             # just present in the zip but findable at the exact path the
             # extension expects when it's unpacked/loaded.
             popup_html = (EXTENSION / "popup.html").read_text(encoding="utf-8")
-            self.assertIn("assets/io.svg", popup_html)
+            self.assertIn("assets/inoue-logo.svg", popup_html)
 
 
 if __name__ == "__main__":

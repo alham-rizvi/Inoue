@@ -24,6 +24,8 @@ api = [
 	"uvicorn>=0.30",
 ]
 mcp = [
+	# mcp_server.py supports both the v1 (FastMCP) and v2 (MCPServer) SDK
+	# APIs directly, so no upper/lower pin is needed beyond 1.0.
 	"mcp>=1.0",
 ]
 hashing = [

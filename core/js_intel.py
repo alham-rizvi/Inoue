@@ -190,25 +190,3 @@ def harvest(body: str, base_url: str, timeout: int = 10, max_bundles: int = MAX_
         "secret_findings": secrets,
         "bundle_text": bundles,  # kept for the caller to re-run fingerprinting against; not serialized as-is
     }
-
-
-# Backward-compatible helpers retained for integrations from the previous API.
-_LEGACY_FETCH_RE = re.compile(r"(?:fetch|axios\.(?:get|post|put|delete|patch))\s*\(\s*['\"]([^'\"]+)", re.I)
-_LEGACY_HOST_RE = re.compile(r"\b(?:https?://)?(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d+)?\b", re.I)
-_LEGACY_SECRET_RE = re.compile(r"\b(?:AKIA[0-9A-Z]{12,}|AIza[0-9A-Za-z_-]{20,}|gh[pousr]_[A-Za-z0-9_]{16,}|xox[baprs]-[A-Za-z0-9-]{16,})\b")
-def script_sources(html: str, base_url: str) -> list[str]:
-    return collect_script_urls(html, base_url, limit=MAX_BUNDLES)
-def parse_bundle(text: str, source_url: str = "") -> dict:
-    text = text or ""
-    endpoints = extract_endpoints({source_url: text})
-    fetch_calls = sorted(set(_LEGACY_FETCH_RE.findall(text)))
-    hosts = sorted({re.sub(r"^https?://", "", value).split("/", 1)[0] for value in _LEGACY_HOST_RE.findall(text)})
-    params = sorted(set(re.findall(r"[?&]([A-Za-z_][A-Za-z0-9_.-]{1,63})=", text)))
-    secrets = [{"type": "pattern-matched-secret", "value": _redact(m.group(0)), "source": source_url} for m in _LEGACY_SECRET_RE.finditer(text)]
-    return {"endpoints": endpoints, "fetch_calls": fetch_calls, "hosts": hosts, "parameters": params, "secrets": secrets, "source_maps": sorted(set(re.findall(r"//[#@]\s*sourceMappingURL=([^\s]+)", text)))}
-def grade_security_headers(headers: dict) -> dict:
-    values = {str(k).lower(): str(v) for k, v in (headers or {}).items()}
-    expected = ("strict-transport-security", "content-security-policy", "x-frame-options", "x-content-type-options", "referrer-policy")
-    missing = [key for key in expected if not values.get(key)]
-    cors = {"wildcard_origin": values.get("access-control-allow-origin") == "*", "credentials_with_wildcard": values.get("access-control-allow-origin") == "*" and values.get("access-control-allow-credentials", "").lower() == "true"}
-    return {"present": [key for key in expected if values.get(key)], "missing": missing, "grade": "A" if not missing else "B" if len(missing) <= 1 else "C" if len(missing) <= 3 else "D", "cors": cors}

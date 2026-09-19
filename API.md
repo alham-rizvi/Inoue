@@ -37,6 +37,26 @@ nameservers, DNSSEC data, the source URL, and the raw RDAP response. The
 lookup uses the local WHOIS client plus the public standards-based RDAP
 service; no API key is required.
 
+Both `/scan` and `/scan/batch` accept the same optional flags the CLI does -
+`crawl_pages`, `crawl_katana`, `js_intel`/`js_intel_bundles`,
+`active_subdomains`, `active_ports`, `nuclei_scan`/`nuclei_severity`,
+`harvest_urls`, `screenshot`/`screenshot_dir`, `check_takeover`,
+`api_discovery`, `email_security`, `http_methods`, `save_history`, and
+`scope_file` (a server-side path to a scope file; the target is refused
+before any request if it isn't in scope). All default to off/unrestricted
+except where noted. For example, a full posture pass:
+
+```bash
+curl -X POST http://localhost:8000/scan \
+  -H 'Content-Type: application/json' \
+  -d '{"target":"https://alhamrizvi.in","modules":["fast"],"email_security":true,"http_methods":true,"check_takeover":true}'
+```
+
+The response now also includes `waf`, `security_grade`, `cors_misconfig`,
+`http_posture`, `email_security`, `js_intel`, `takeover_candidates`,
+`api_surface`, `eol_technologies`, and `risk` (the triage score combining
+every signal - see COMMANDS.md's "Triage scoring" section).
+
 ## Batch scan
 
 ```bash
@@ -84,13 +104,22 @@ This writes Chrome and Firefox ZIP archives under `dist/extension/`.
 
 ## MCP integration
 
-For MCP-compatible clients, install the optional extra and launch the stdio
-server:
+Model-agnostic: this is a standard MCP server, so any MCP-compatible
+client can connect, not just one AI vendor. Install the optional extra
+and launch it:
 
 ```bash
 python -m pip install "inoue[mcp]"
 inoue-mcp
 ```
 
-The MCP tools are `search_catalog`, `get_catalog_summary`, and
-`scan_read_only`. They reuse the local signature catalog and read-only scanner.
+Defaults to `stdio` (for clients that spawn Inoue as a local subprocess).
+For any other MCP-compatible client, serve over HTTP instead:
+
+```bash
+inoue-mcp --transport streamable-http
+```
+
+Tools: `search_catalog`, `get_catalog_summary`, `scan_read_only`,
+`check_waf_tool`, `check_security_headers_tool`, `get_scan_history_tool`,
+`check_eol_tool`. All read-only, reusing the local catalog and scanner.

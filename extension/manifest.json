@@ -1,13 +1,9 @@
 {
   "manifest_version": 3,
   "name": "Inoue Web Stack Detector",
-  "version": "1.5.3",
+  "version": "1.0.0",
   "description": "Detect the technology stack exposed by the active web page using a local Inoue Python backend.",
-  "permissions": [
-    "activeTab",
-    "tabs",
-    "storage"
-  ],
+  "permissions": ["activeTab", "tabs", "storage"],
   "host_permissions": [
     "http://127.0.0.1:8000/*",
     "http://localhost:8000/*"
@@ -16,6 +12,12 @@
     "http://*/*",
     "https://*/*"
   ],
+  "icons": {
+    "16": "assets/icon-16.png",
+    "32": "assets/icon-32.png",
+    "48": "assets/icon-48.png",
+    "128": "assets/icon-128.png"
+  },
   "action": {
     "default_title": "Detect web stack",
     "default_popup": "popup.html",
@@ -33,16 +35,8 @@
     "gecko": {
       "id": "inoue-web-stack-detector@alhamrizvi.in",
       "data_collection_permissions": {
-        "required": [
-          "none"
-        ]
+        "required": ["none"]
       }
     }
-  },
-  "icons": {
-    "16": "assets/icon-16.png",
-    "32": "assets/icon-32.png",
-    "48": "assets/icon-48.png",
-    "128": "assets/icon-128.png"
   }
 }

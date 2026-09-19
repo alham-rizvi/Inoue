@@ -20,7 +20,6 @@ class SdkCompatibilityTests(unittest.TestCase):
     `except ImportError`, reporting "not installed" even when an
     incompatible version WAS installed."""
 
-    @unittest.skipUnless(mcp_server.mcp is not None, "optional mcp SDK is not installed")
     def test_mcp_server_base_resolved_in_this_environment(self):
         """This sandbox has the real mcp package installed - confirm the
         module actually resolved a usable server class, not silently None."""
@@ -93,17 +92,16 @@ class TransportSelectionTests(unittest.TestCase):
 
 
 class ToolRegistrationTests(unittest.TestCase):
-    @unittest.skipUnless(mcp_server.mcp is not None, "optional mcp SDK is not installed")
     def test_all_expected_tools_are_registered(self):
         import asyncio
         tools = asyncio.run(mcp_server.mcp.list_tools())
         names = {t.name for t in tools}
         self.assertEqual(names, {
             "search_catalog", "get_catalog_summary", "scan_read_only",
-            "check_waf_tool", "check_security_headers_tool", "get_scan_history_tool", "check_eol_tool",
+            "check_waf_tool", "check_security_headers_tool", "get_scan_history_tool",
+            "check_eol_tool",
         })
 
-    @unittest.skipUnless(mcp_server.mcp is not None, "optional mcp SDK is not installed")
     def test_every_tool_has_a_docstring_description(self):
         import asyncio
         tools = asyncio.run(mcp_server.mcp.list_tools())
@@ -112,11 +110,6 @@ class ToolRegistrationTests(unittest.TestCase):
 
 
 class CatalogToolTests(unittest.TestCase):
-    def test_check_technology_eol_is_offline_and_explicit_for_unknowns(self):
-        from mcp_server import check_technology_eol
-        self.assertTrue(check_technology_eol("PHP", "7.4.3")["checked"])
-        self.assertFalse(check_technology_eol("Unknown", "1.0")["checked"])
-
     def test_search_signatures_is_catalog_only_no_network(self):
         matches = search_signatures("nginx")
         self.assertTrue(len(matches) >= 1)

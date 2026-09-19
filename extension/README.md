@@ -4,11 +4,18 @@ This shared WebExtension works in Chrome and Firefox. It reads the active HTTP(S
 
 ## Run locally
 
-From the repository root:
+From the repository root, make sure the API dependencies are installed
+(they're included in `requirements.txt`; if you installed the `inoue`
+package directly instead, use `pip install "inoue[api]"`):
 
 ```bash
+pip install -r requirements.txt
 python -m uvicorn api.main:app --host 127.0.0.1 --port 8000
 ```
+
+You should see `Uvicorn running on http://127.0.0.1:8000` - if instead
+you get `ModuleNotFoundError: No module named 'fastapi'`, the API
+dependencies weren't installed; run the `pip install` line above first.
 
 Load `extension/` as an unpacked extension:
 

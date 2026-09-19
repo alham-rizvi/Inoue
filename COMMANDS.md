@@ -40,16 +40,45 @@ different local API URL or API key from the popup settings.
 
 ## MCP server
 
-Install the optional dependency and start the stdio MCP server:
+Model-agnostic by design: this is a standard Model Context Protocol
+server, so any MCP-compatible client can connect - not anything specific
+to one AI vendor or model.
+
+Install the optional dependency and start the server:
 
 ```bash
 python -m pip install "inoue[mcp]"
 inoue-mcp
 ```
 
-Available tools are `search_catalog`, `get_catalog_summary`, and
-`scan_read_only`. The server does not expose exploit, write, or credential
-automation operations.
+By default it serves over `stdio` (for clients that spawn Inoue as a
+local subprocess, like Claude Desktop or Claude Code). For any other
+MCP-compatible client - a web-based client, a remote agent, anything that
+connects over HTTP instead of spawning a subprocess - serve over HTTP
+instead:
+
+```bash
+inoue-mcp --transport streamable-http
+# or: inoue-mcp --transport sse
+# or via env var: INOUE_MCP_TRANSPORT=streamable-http inoue-mcp
+```
+
+Works with both major versions of the underlying `mcp` SDK (`FastMCP` in
+v1, renamed to `MCPServer` in v2) - it detects whichever is installed and
+gives a clear error naming the actual problem if neither resolves,
+instead of a misleading "not installed" message when an incompatible
+version is present.
+
+Available tools:
+
+- `search_catalog` / `get_catalog_summary` - local signature catalog only, no network requests
+- `scan_read_only` - full technology fingerprint scan (same engine as the CLI)
+- `check_waf_tool` - fast, passive-only WAF/CDN check (one request, no full scan)
+- `check_security_headers_tool` - security header grade + CORS misconfiguration check (one request)
+- `get_scan_history_tool` - read previously saved scan history for a target; never triggers a new scan
+
+The server does not expose exploit, write, or credential automation
+operations - every tool is read-only.
 
 ## Terminal presentation
 
@@ -396,6 +425,103 @@ Fetches the page's own JS bundles (bounded, default 3, size-capped) and:
   the full secret value is never logged, stored, or displayed.
 
 Available as `js_intel` in JSON output.
+
+## Scope guardrails
+
+```bash
+python inoue.py --scope program-scope.txt <target>
+```
+
+Every module that can fan out to hosts beyond the one explicitly typed on
+the command line - subdomain takeover checks across discovered
+subdomains being the highest-risk case - respects a declared scope
+before firing a single request at a host you never authorized scanning.
+
+Scope file format (plain text, one entry per line, safe to paste a
+program's published scope list in with minimal editing):
+
+```
+# comment
+example.com            # exact host
+*.example.com          # wildcard subdomain
+10.0.0.0/8              # CIDR range
+!internal.example.com  # explicit deny - always wins over a broader allow
+!10.1.0.0/16
+```
+
+No `--scope` flag means unrestricted (the default, unchanged behavior).
+When a scope file is given and the target isn't in it, Inoue refuses to
+scan **before making any request at all** - not after, not partially.
+
+## Subdomain takeover detection
+
+```bash
+python inoue.py --check-takeover --subdomains <target>
+```
+
+Checks the target and any discovered subdomains against the well-known
+"this service exists but the resource doesn't" error pages (S3, GitHub
+Pages, Heroku, Shopify, Netlify, Webflow, Zendesk and ~10 more). A
+matching CNAME raises the reported confidence from medium to high.
+
+Strictly detection-only: Inoue issues a plain GET and matches the
+response body. It never attempts to register, claim, or create anything
+on the third-party service. Every finding is labelled a *candidate* and
+carries a "verify manually" caveat - several of these fingerprints can
+also appear on healthy-but-misconfigured hosts.
+
+## API surface discovery
+
+```bash
+python inoue.py --api-discovery <target>
+```
+
+Probes a fixed list of conventional, framework-default documentation
+paths (`/swagger.json`, `/openapi.json`, `/api-docs`,
+`/.well-known/security.txt`, `/.well-known/openid-configuration`) - not a
+brute-force wordlist - and reports any readable OpenAPI/Swagger spec
+along with its title and documented path count.
+
+For GraphQL, it sends exactly one minimal introspection query to
+determine whether **introspection is enabled** - a legitimate finding on
+its own, since an open introspection endpoint hands over the full schema.
+It stops there; no schema enumeration, no follow-up queries.
+
+## Technology end-of-life detection
+
+Automatic on every scan whenever a versioned technology is detected -
+no flag needed. Cross-references detected technology + version against
+a static table of verified EOL dates (currently PHP, Node.js, and Python
+- each date checked against the vendor's own support-lifecycle page).
+Running EOL software means no further security patches, a frequently
+reported finding in its own right.
+
+Absence from the table means "not checked", never "not EOL" - this is a
+static reference table, not a live feed, and it will go stale. Available
+as `eol_technologies` in JSON output, and feeds the triage risk score.
+
+## Triage scoring
+
+Computed automatically on every scan, no flag needed. Combines every
+other signal Inoue collected - takeover candidates, secrets found in JS
+bundles, CVE severity counts, exposed sensitive files, GraphQL
+introspection, readable API specs, CORS misconfigurations, missing WAF,
+weak security headers, open port count - into a single 0-100 score and
+one of four bands:
+
+- `investigate-first` (60+)
+- `worth-a-look` (30-59)
+- `low-signal` (1-29)
+- `nothing-notable` (0)
+
+This exists to **order a list of targets**, which is the real workflow
+when you have 200 subdomains and limited time. It is explicitly a triage
+heuristic, not a severity rating or a vulnerability claim - every
+contributing factor is reported alongside the score so the ranking is
+auditable and you can disagree with it.
+
+Available as `risk` in JSON output; `core.risk.rank_results()` ranks many
+scan results highest-signal-first.
 
 ## Scan history
 

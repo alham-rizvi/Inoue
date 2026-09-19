@@ -30,14 +30,8 @@ import httpx
 from core import external_tools
 from core.cache import ScanCache
 from core.cve import correlate_cves, load_cve_dataset
-from core.scope import RequestBudget, ScopeError, ScopeMatcher
 from core.waf import detect_waf
 from core.security_grade import detect_cors_misconfig, grade_security_headers
-from core.api_discovery import discover as discover_api
-from core.email_security import analyze as analyze_email_security
-from core.http_posture import analyze as analyze_http_posture
-from core.risk import score_result
-from core.takeover import check_takeover as check_takeover_host
 
 from fingerprints.signatures import (
     COMPILED_SIGNATURES,
@@ -61,6 +55,13 @@ class Detection:
     confidence_score: float = 0.0
     evidence: str = ""
     cves: list[dict] = field(default_factory=list)
+    # How the version was obtained, so a precisely-parsed version is never
+    # confused with an aggressively-guessed one:
+    #   "signature" - captured by the technology's own signature pattern
+    #   "script-url" / "header" / "html-near-name" - found by the aggressive
+    #       hunter searching near the technology's name (may belong to a
+    #       bundled dependency rather than the product itself)
+    #   ""          - no version found
     version_source: str = ""
 
 
@@ -87,8 +88,6 @@ class ScanResult:
     error: Optional[str] = None
     enriched: dict = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
-    waf: list[dict] = field(default_factory=list)
-    js_intel: dict = field(default_factory=dict)
     cache_hit: bool = False
     waf: list = field(default_factory=list)
 
@@ -115,6 +114,84 @@ def _normalize_version(raw: str) -> Optional[str]:
     if value.isdigit():
         return value if len(value) <= 5 else None
     return None
+
+
+def _slugify_tech_name(name: str) -> list[str]:
+    """Return plausible textual forms of a technology name as it might appear
+    in a URL, filename, or JS variable (e.g. "Font Awesome" -> font-awesome,
+    fontawesome, font_awesome, fontAwesome)."""
+    lowered = name.lower().strip()
+    cleaned = re.sub(r"[^a-z0-9]+", " ", lowered).strip()
+    if not cleaned:
+        return []
+    words = cleaned.split()
+    joined = "".join(words)
+    forms = {
+        "-".join(words),
+        "_".join(words),
+        joined,
+        ".".join(words),
+    }
+    if len(words) > 1:
+        forms.add(words[0])  # e.g. "bootstrap" from "Bootstrap Icons"
+    return [f for f in forms if len(f) >= 3]
+
+
+_VERSION_NEAR_NAME_TEMPLATES = [
+    # tech-name immediately followed by a version: "jquery-3.6.0.min.js",
+    # "bootstrap@5.3.2", "React v18.2.0", "wp-content/plugins/foo/2.1.4"
+    r"{name}[^a-z0-9]{{0,3}}v?(\d+(?:\.\d+){{1,3}})",
+    # version immediately before the name: "3.6.0/jquery.min.js"
+    r"v?(\d+(?:\.\d+){{1,3}})[^a-z0-9]{{0,3}}{name}",
+    # explicit assignment: "jQuery.fn.jquery = '3.6.0'", "React.version='18.2.0'"
+    r"{name}[^;\n]{{0,40}}?version[\"'\s:=]+v?(\d+(?:\.\d+){{1,3}})",
+]
+
+
+def _aggressive_version_hunt(tech_name: str, body: str, scripts: list[str], headers: dict) -> tuple[Optional[str], str]:
+    """Best-effort version discovery for a detection that produced no version
+    from its own signature pattern.
+
+    This trades precision for coverage on purpose: it will sometimes attach
+    a version that belongs to a bundled dependency rather than the product
+    itself (a `jquery-3.6.0.js` reference near a plugin's markup, a CDN path
+    version that reflects the asset host rather than the library). Callers
+    get the provenance back alongside the value via `version_source` so a
+    confidently-parsed version is never silently confused with a guessed one.
+
+    Returns (version, source_label). source_label is "" when nothing is found.
+    """
+    name_forms = _slugify_tech_name(tech_name)
+    if not name_forms:
+        return None, ""
+
+    # Search the highest-signal text first so a script URL carrying the
+    # library's own name beats a random number elsewhere in the page.
+    haystacks = [
+        ("script-url", " ".join(scripts)),
+        ("header", " ".join(f"{k}: {v}" for k, v in (headers or {}).items())),
+        ("html-near-name", body or ""),
+    ]
+
+    for source_label, haystack in haystacks:
+        if not haystack:
+            continue
+        lowered = haystack.lower()
+        for form in name_forms:
+            if form not in lowered:
+                continue
+            escaped = re.escape(form)
+            for template in _VERSION_NEAR_NAME_TEMPLATES:
+                try:
+                    regex = template.format(name=escaped)
+                    match = re.search(regex, lowered, re.IGNORECASE)
+                except re.error:
+                    continue
+                if match:
+                    normalized = _normalize_version(match.group(1))
+                    if normalized:
+                        return normalized, source_label
+    return None, ""
 
 
 def _extract_version(pattern: str, text: str) -> Optional[str]:
@@ -158,44 +235,6 @@ def _extract_version(pattern: str, text: str) -> Optional[str]:
     except re.error:
         pass
     return None
-
-
-def _slugify_tech_name(name: str) -> list[str]:
-    lowered = name.lower().strip()
-    cleaned = re.sub(r"[^a-z0-9]+", " ", lowered).strip()
-    if not cleaned:
-        return []
-    words = cleaned.split()
-    forms = {"-".join(words), "_".join(words), "".join(words), ".".join(words)}
-    if len(words) > 1:
-        forms.add(words[0])
-    return [form for form in forms if len(form) >= 3]
-
-_VERSION_NEAR_NAME_TEMPLATES = [
-    r"{name}[^a-z0-9]{{0,3}}v?(\d+(?:\.\d+){{1,3}})",
-    r"v?(\d+(?:\.\d+){{1,3}})[^a-z0-9]{{0,3}}{name}",
-    r"{name}[^;\n]{{0,40}}?version[\"'\s:=]+v?(\d+(?:\.\d+){{1,3}})",
-]
-
-def _aggressive_version_hunt(tech_name: str, body: str, scripts: list[str], headers: dict) -> tuple[Optional[str], str]:
-    """Best-effort version discovery, explicitly labelled as guessed provenance."""
-    forms = _slugify_tech_name(tech_name)
-    haystacks = [("script-url", " ".join(scripts)), ("header", " ".join(f"{k}: {v}" for k, v in (headers or {}).items())), ("html-near-name", body or "")]
-    for source, haystack in haystacks:
-        lowered = haystack.lower()
-        for form in forms:
-            if form not in lowered:
-                continue
-            for template in _VERSION_NEAR_NAME_TEMPLATES:
-                try:
-                    match = re.search(template.format(name=re.escape(form)), lowered, re.IGNORECASE)
-                except re.error:
-                    continue
-                if match:
-                    version = _normalize_version(match.group(1))
-                    if version:
-                        return version, source
-    return None, ""
 
 
 def _extract_deep_version(text: str) -> Optional[str]:
@@ -249,12 +288,13 @@ def _match_html(sig: dict, body: str) -> tuple[bool, Optional[str], str]:
         m = pattern.search(body)
         if m:
             snippet = body[max(0, m.start()-20):m.end()+20].strip().replace("\n", " ")
-            tag_start = body.rfind("<", 0, m.start())
-            tag_end = body.find(">", m.end())
-            if tag_start >= 0 and tag_end >= 0 and "<" not in body[tag_start + 1:m.start()]:
-                evidence_text = body[tag_start:tag_end + 1]
-            else:
-                evidence_text = body[max(0, m.start() - 80):m.end() + 80]
+            # Keep this window tight: it's meant to catch a version number
+            # immediately adjacent to the match (e.g. "TechName v1.2.3"),
+            # not to scan a wide swath of the page. A wider window risks
+            # picking up an unrelated version number from a completely
+            # different, nearby tag - especially in compact/minified HTML
+            # where many third-party script tags sit close together.
+            evidence_text = body[max(0, m.start() - 20):m.end() + 60]
             version = _extract_version(pattern.pattern if hasattr(pattern, "pattern") else str(pattern), evidence_text)
             version = version or _extract_deep_version(evidence_text)
             return True, version, f"HTML: …{snippet[:60]}…"
@@ -547,8 +587,6 @@ def build_recon_plan(requested: Optional[list[str]] = None) -> dict:
         "passive": False,
         "company": False,
         "cve": False,
-        "waf": False,
-        "js_intel": False,
     }
     if not requested:
         modules.update({"headers": True, "tech": True, "smart": True})
@@ -585,14 +623,6 @@ def build_recon_plan(requested: Optional[list[str]] = None) -> dict:
         modules["extra"] = True
     if cve_correlation:
         modules["cve"] = True
-    if "intel" in selected or "js" in selected or "js-intel" in selected:
-        modules["js_intel"] = True
-    if "waf" in selected or "waf-probe" in selected:
-        modules["waf"] = True
-    if "api" in selected:
-        modules["api"] = True
-    if "exposure" in selected or "sensitive" in selected:
-        modules["exposure"] = True
 
     if fast_scan:
         modules.update({
@@ -610,8 +640,6 @@ def build_recon_plan(requested: Optional[list[str]] = None) -> dict:
 
     if "intel" in selected:
         modules["extra"] = True
-    modules["waf"] = full_recon or "waf" in selected
-    modules["js_intel"] = full_recon or "js-intel" in selected or "js_intel" in selected
     if full_recon:
         modules.update({
             "headers": True,
@@ -627,10 +655,6 @@ def build_recon_plan(requested: Optional[list[str]] = None) -> dict:
             "active": True,
             "passive": True,
             "company": True,
-            "waf": True,
-            "js_intel": True,
-            "api": True,
-            "exposure": True,
         })
     return modules
 
@@ -1192,6 +1216,52 @@ def _merge_js_intel(result: "ScanResult", js_intel_payload: Optional[dict]) -> N
         existing_names.add(detection.name)
 
 
+def _run_takeover_check(hostname: str, subdomains: list, dns_records: dict, timeout: int, scope_file: Optional[str] = None) -> list:
+    """Check the target and any discovered subdomains for takeover candidates.
+
+    This is the highest-risk fanout point for scope creep: subdomain
+    discovery can surface hosts well outside what was explicitly typed on
+    the command line, and every one of them gets a live GET. When a scope
+    file is given, every discovered host is filtered through it before any
+    request fires - the target itself included, so a scope file always
+    wins even over the hostname passed in directly.
+    """
+    from core.takeover import check_takeover_batch
+
+    hosts = [hostname]
+    for entry in (subdomains or []):
+        name = entry.get("subdomain") if isinstance(entry, dict) else entry
+        if name and name not in hosts:
+            hosts.append(name)
+
+    if scope_file:
+        from core.scope import filter_hosts, parse_scope_file
+        hosts = filter_hosts(hosts, parse_scope_file(scope_file))
+        if not hosts:
+            return []
+
+    cnames = {}
+    for record in (dns_records or {}).get("CNAME", []) or []:
+        cnames[hostname] = str(record)
+    return check_takeover_batch(hosts, cnames=cnames, timeout=timeout)
+
+
+def _run_api_discovery(base_url: str, timeout: int) -> dict:
+    from core import api_discovery as api_discovery_module
+    return api_discovery_module.discover(base_url, timeout=timeout)
+
+
+def _run_email_security(hostname: str, timeout: int) -> dict:
+    from core import email_security as email_module
+    return email_module.analyze(hostname, timeout=max(2, min(5, timeout)))
+
+
+def _run_http_posture(headers: dict, final_url: str, history, check_methods: bool, timeout: int) -> dict:
+    from core import http_posture
+    return http_posture.analyze(headers, final_url, history=history,
+                                check_methods=check_methods, timeout=timeout)
+
+
 def _collect_external_tool_results(recon_results: dict) -> dict:
     """Pull whichever ext_* recon task results are present into one dict."""
     mapping = {
@@ -1285,41 +1355,6 @@ def _scan_common_ports(hostname: str, timeout: int = 1) -> list[dict]:
         return [result for result in executor.map(probe, ports) if result]
 
 
-def _probe_paths(base_url: str, paths: list[str], timeout: int = 3) -> list[dict]:
-    results = []
-    try:
-        with httpx.Client(timeout=timeout, verify=False, follow_redirects=True) as client:
-            for target in paths:
-                try:
-                    response = client.get(target, headers={"User-Agent": "Inoue/1.0 read-only recon"})
-                    if response.status_code < 500 and response.status_code not in {404, 410}:
-                        results.append({"url": target, "status_code": response.status_code, "content_type": response.headers.get("content-type", "")})
-                except Exception:
-                    continue
-    except Exception:
-        return []
-    return results
-
-
-def _probe_conventional_paths(base_url: str, timeout: int = 3) -> list[dict]:
-    return _probe_paths(base_url, conventional_paths(base_url), timeout)
-
-
-def _probe_exposure_paths(base_url: str, timeout: int = 3) -> list[dict]:
-    return _probe_paths(base_url, exposure_paths(base_url), timeout)
-
-
-def _collect_external_tool_results(recon_results: dict) -> dict:
-    mapping = {
-        "ext_subdomains": "active_subdomains",
-        "ext_ports": "active_ports",
-        "ext_nuclei": "nuclei",
-        "ext_urls": "harvested_urls",
-        "ext_screenshot": "screenshot",
-    }
-    return {output: recon_results[key] for key, output in mapping.items() if key in recon_results}
-
-
 def _collect_company_intel(hostname: str, body: str = "", headers: Optional[dict] = None) -> dict:
     intel = {}
     try:
@@ -1356,7 +1391,6 @@ def build_service_summary(result: ScanResult) -> list[dict]:
             "confidence": tech.confidence,
             "confidence_score": tech.confidence_score,
             "evidence": tech.evidence,
-            "version_source": tech.version_source,
         })
     return summary
 
@@ -1382,8 +1416,6 @@ def _serialize_scan_result(result: ScanResult) -> dict:
         "directories": result.directories,
         "extra_intel": result.extra_intel,
         "enriched": result.enriched,
-        "waf": result.waf,
-        "js_intel": result.js_intel,
         "error": result.error,
         "notes": result.notes,
         "cache_hit": result.cache_hit,
@@ -1418,6 +1450,12 @@ def serialize_scan_result(result: ScanResult) -> dict:
         "crawl": result.enriched.get("crawl", {}) if result.enriched else {},
         "external_tools": result.enriched.get("external_tools", {}) if result.enriched else {},
         "js_intel": result.enriched.get("js_intel", {}) if result.enriched else {},
+        "takeover_candidates": result.enriched.get("takeover_candidates", []) if result.enriched else [],
+        "api_surface": result.enriched.get("api_surface", {}) if result.enriched else {},
+        "email_security": result.enriched.get("email_security", {}) if result.enriched else {},
+        "http_posture": result.enriched.get("http_posture", {}) if result.enriched else {},
+        "eol_technologies": result.enriched.get("eol_technologies", []) if result.enriched else [],
+        "risk": result.enriched.get("risk", {}) if result.enriched else {},
         "security_grade": result.enriched.get("security_grade", {}) if result.enriched else {},
         "cors_misconfig": result.enriched.get("cors_misconfig", []) if result.enriched else [],
         "notes": result.notes,
@@ -1449,8 +1487,6 @@ def _deserialize_scan_result(payload: dict) -> ScanResult:
         error=payload.get("error"),
         notes=payload.get("notes", []),
         cache_hit=bool(payload.get("cache_hit", False)),
-        waf=payload.get("waf", []),
-        js_intel=payload.get("js_intel", {}),
     )
     result.technologies = [Detection(**item) for item in payload.get("technologies", [])]
     return result
@@ -1466,6 +1502,12 @@ def _scan_cache_module(
     cve_min_severity: Optional[str],
     api_key: Optional[str],
     crawl_pages: int = 0,
+    active_subdomains: bool = False,
+    active_ports: bool = False,
+    nuclei_scan: bool = False,
+    nuclei_severity: Optional[str] = None,
+    harvest_urls: bool = False,
+    screenshot: bool = False,
 ) -> str:
     options = {
         "timeout": timeout,
@@ -1477,6 +1519,12 @@ def _scan_cache_module(
         "cve_min_severity": cve_min_severity or "",
         "api_key": bool(api_key),
         "crawl_pages": crawl_pages,
+        "active_subdomains": active_subdomains,
+        "active_ports": active_ports,
+        "nuclei_scan": nuclei_scan,
+        "nuclei_severity": nuclei_severity or "",
+        "harvest_urls": harvest_urls,
+        "screenshot": screenshot,
     }
     return "scan:" + json.dumps(options, sort_keys=True, separators=(",", ":"))
 
@@ -1588,10 +1636,6 @@ async def _async_scan_target(
     progress: Optional[Callable[[str], None]] = None,
     allow_private_targets: bool = True,
     crawl_pages: int = 0,
-    scope_path: Optional[str] = None,
-    max_requests: Optional[int] = None,
-    respect_robots: bool = True,
-    waf_probe: bool = False,
     active_subdomains: bool = False,
     active_ports: bool = False,
     nuclei_scan: bool = False,
@@ -1606,6 +1650,7 @@ async def _async_scan_target(
     api_discovery: bool = False,
     email_security: bool = False,
     http_methods: bool = False,
+    scope_file: Optional[str] = None,
 ) -> ScanResult:
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
@@ -1619,15 +1664,17 @@ async def _async_scan_target(
     }
     parsed = urlparse(url)
     result = ScanResult(url=url, final_url=url, status_code=0, response_time_ms=0)
-    scope = ScopeMatcher.from_file(scope_path)
-    try:
-        if scope:
-            scope.require(url)
-    except ScopeError as exc:
-        result.error = str(exc)
-        return result
     plan = build_recon_plan(modules)
     started = time.perf_counter()
+
+    if scope_file:
+        from core.scope import parse_scope_file
+        scope = parse_scope_file(scope_file)
+        if not scope.allows(parsed.hostname or ""):
+            result.error = f"'{parsed.hostname}' is not in scope per {scope_file} - refusing to scan without making any request."
+            if progress:
+                progress(result.error)
+            return result
 
     try:
         response = await _async_get_with_redirect_policy(
@@ -1666,6 +1713,9 @@ async def _async_scan_target(
     result.server = _header_value(result.headers, "server")
     cookies = {key: value for key, value in response.cookies.items()}
     result.waf = detect_waf(result.headers, cookies)
+    result.enriched["http_posture"] = _run_http_posture(
+        result.headers, result.final_url, getattr(response, "history", None), http_methods, timeout,
+    )
     if plan.get("tech") or plan.get("smart") or plan.get("headers"):
         result.technologies = run_fingerprints(
             result.headers,
@@ -1694,6 +1744,9 @@ async def _async_scan_target(
     cors_findings = detect_cors_misconfig(result.headers)
     if cors_findings:
         result.enriched["cors_misconfig"] = cors_findings
+    result.enriched["http_posture"] = _run_http_posture(
+        result.headers, result.final_url, getattr(response, "history", None), http_methods, timeout,
+    )
 
     recon_results = {}
     tasks = []
@@ -1725,6 +1778,12 @@ async def _async_scan_target(
         )))
     if js_intel and hostname:
         tasks.append(("js_intel", lambda: _run_js_intel(response.text, result.final_url, max(5, timeout), js_intel_bundles)))
+    if check_takeover and hostname:
+        tasks.append(("takeover", lambda: _run_takeover_check(hostname, result.subdomains, result.dns_records, timeout, scope_file)))
+    if api_discovery and hostname:
+        tasks.append(("api_surface", lambda: _run_api_discovery(result.final_url, timeout)))
+    if email_security and hostname:
+        tasks.append(("email_security", lambda: _run_email_security(hostname, timeout)))
     if active_subdomains and hostname:
         tasks.append(("ext_subdomains", lambda: external_tools.run_subfinder(hostname, timeout=max(10, timeout * 3))))
     if active_ports and hostname:
@@ -1763,6 +1822,15 @@ async def _async_scan_target(
     crawl_detections, crawl_pages_scanned = recon_results.get("crawl") or ([], [])
     _merge_crawl_and_favicon(result, recon_results.get("favicon"), crawl_detections, crawl_pages_scanned)
     _merge_js_intel(result, recon_results.get("js_intel"))
+    takeover_candidates = recon_results.get("takeover")
+    if takeover_candidates:
+        result.enriched["takeover_candidates"] = takeover_candidates
+    api_surface = recon_results.get("api_surface")
+    if api_surface:
+        result.enriched["api_surface"] = api_surface
+    email_posture = recon_results.get("email_security")
+    if email_posture:
+        result.enriched["email_security"] = email_posture
     external_results = _collect_external_tool_results(recon_results)
     if external_results:
         result.enriched["external_tools"] = external_results
@@ -1775,14 +1843,18 @@ async def _async_scan_target(
         external = _enrich_with_external_services(hostname, [tech.name for tech in result.technologies], api_key)
         if external:
             result.enriched.update(external)
-    from core.eol import check_technologies
-    eol_findings = check_technologies(result.technologies)
-    if eol_findings:
-        result.enriched["eol_technologies"] = eol_findings
     from core.plugins import run_plugins
     plugin_results = run_plugins(result, plugin_dirs, progress)
     if plugin_results:
         result.enriched["plugins"] = plugin_results
+    from core.eol import check_technologies
+    eol_findings = check_technologies(result.technologies)
+    if eol_findings:
+        result.enriched["eol_technologies"] = eol_findings
+
+    # Computed last so it sees every signal collected above.
+    from core.risk import score_result
+    result.enriched["risk"] = score_result(result)
     return result
 
 
@@ -1803,10 +1875,6 @@ async def scan_many(
     cve_min_severity: Optional[str] = None,
     allow_private_targets: bool = True,
     crawl_pages: int = 0,
-    scope_path: Optional[str] = None,
-    max_requests: Optional[int] = None,
-    respect_robots: bool = True,
-    waf_probe: bool = False,
     active_subdomains: bool = False,
     active_ports: bool = False,
     nuclei_scan: bool = False,
@@ -1821,6 +1889,7 @@ async def scan_many(
     api_discovery: bool = False,
     email_security: bool = False,
     http_methods: bool = False,
+    scope_file: Optional[str] = None,
 ) -> list[ScanResult]:
     """Scan multiple targets concurrently using one shared async HTTP client."""
     if not targets:
@@ -1853,6 +1922,8 @@ async def scan_many(
                 cache_module = _scan_cache_module(
                     timeout, follow_redirects, dns, ssl_check, modules,
                     plugin_dirs, cve_min_severity, api_key, crawl_pages,
+                    active_subdomains, active_ports, nuclei_scan, nuclei_severity,
+                    harvest_urls, screenshot,
                 )
                 cached = cache.get(target, cache_module)
                 if cached:
@@ -1866,11 +1937,10 @@ async def scan_many(
                 client, target, timeout, follow_redirects, modules, plugin_dirs,
                 cve_min_severity, dns, ssl_check, api_key, progress,
                 allow_private_targets, crawl_pages,
-                scope_path, max_requests, respect_robots, waf_probe,
                 active_subdomains, active_ports, nuclei_scan, nuclei_severity,
                 harvest_urls, screenshot, screenshot_dir, crawl_katana,
-                js_intel, js_intel_bundles,
-                check_takeover, api_discovery, email_security, http_methods,
+                js_intel, js_intel_bundles, check_takeover, api_discovery,
+                email_security, http_methods, scope_file,
             )
             if cache and not result.error:
                 cache.set(target, cache_module, _serialize_scan_result(result))
@@ -1911,7 +1981,6 @@ def build_recon_summary(result: ScanResult) -> list[dict]:
             "version": tech.version or "unknown",
             "confidence": tech.confidence,
             "evidence": tech.evidence,
-            "version_source": tech.version_source,
             "service_hints": hints,
         })
     return services
@@ -2025,6 +2094,11 @@ def run_fingerprints(
     def report(message: str):
         if progress:
             progress(message)
+
+    # Always defined: the sync path has several fetch branches (HTTPS, HTTP
+    # fallback, and error paths) and http_posture is computed after all of
+    # them, so this must never be unbound.
+    _response_history = None
 
     scripts = _extract_scripts(body)
     meta = _extract_meta(body)
@@ -2175,10 +2249,6 @@ def scan(
     cve_min_severity: Optional[str] = None,
     allow_private_targets: bool = True,
     crawl_pages: int = 0,
-    scope_path: Optional[str] = None,
-    max_requests: Optional[int] = None,
-    respect_robots: bool = True,
-    waf_probe: bool = False,
     active_subdomains: bool = False,
     active_ports: bool = False,
     nuclei_scan: bool = False,
@@ -2193,6 +2263,7 @@ def scan(
     api_discovery: bool = False,
     email_security: bool = False,
     http_methods: bool = False,
+    scope_file: Optional[str] = None,
 ) -> ScanResult:
     def report(message: str):
         if progress:
@@ -2203,15 +2274,6 @@ def scan(
 
     parsed = urlparse(url)
     hostname = parsed.hostname or ""
-    scope = ScopeMatcher.from_file(scope_path)
-    try:
-        if scope:
-            scope.require(url)
-    except ScopeError as exc:
-        return ScanResult(url=url, final_url=url, status_code=0, response_time_ms=0, error=str(exc))
-    budget = RequestBudget(max_requests)
-    if not budget.consume():
-        return ScanResult(url=url, final_url=url, status_code=0, response_time_ms=0, error="request budget exhausted")
     report(f"starting request to {url}")
 
     headers_to_send = {
@@ -2224,6 +2286,14 @@ def scan(
 
     result = ScanResult(url=url, final_url=url, status_code=0, response_time_ms=0)
     plan = build_recon_plan(modules)
+
+    if scope_file:
+        from core.scope import parse_scope_file
+        scope = parse_scope_file(scope_file)
+        if not scope.allows(hostname):
+            result.error = f"'{hostname}' is not in scope per {scope_file} - refusing to scan without making any request."
+            report(result.error)
+            return result
 
     try:
         t0 = time.time()
@@ -2246,6 +2316,7 @@ def scan(
         parsed = urlparse(result.final_url)
         hostname = parsed.hostname or hostname
         result.waf = detect_waf(resp_headers, cookies)
+        _response_history = getattr(resp, "history", None)
         if plan.get("tech") or plan.get("smart") or plan.get("headers"):
             result.technologies = run_fingerprints(
                 resp_headers,
@@ -2260,11 +2331,6 @@ def scan(
         result.notes = detect_contradictions(result.technologies)
         if "cve" in (modules or []) or "cves" in (modules or []):
             _correlate_detection_cves(result.technologies, min_severity=cve_min_severity)
-        if plan.get("waf"):
-            result.waf = serialize_waf(detect_waf(resp_headers, cookies))
-        if plan.get("js_intel"):
-            result.js_intel = collect_js_intel(result.final_url, body, timeout=max(1, min(5, timeout)))
-        result.extra_intel.setdefault("security_headers", grade_security_headers(resp_headers))
 
     except httpx.ConnectError:
         # Try HTTP fallback
@@ -2287,6 +2353,7 @@ def scan(
             parsed = urlparse(result.final_url)
             hostname = parsed.hostname or hostname
             result.waf = detect_waf(resp_headers, cookies)
+            _response_history = getattr(resp, "history", None)
             if plan.get("tech") or plan.get("smart") or plan.get("headers"):
                 result.technologies = run_fingerprints(
                     resp_headers,
@@ -2325,44 +2392,35 @@ def scan(
     cors_findings = detect_cors_misconfig(result.headers)
     if cors_findings:
         result.enriched["cors_misconfig"] = cors_findings
+    result.enriched["http_posture"] = _run_http_posture(
+        result.headers, result.final_url, _response_history, http_methods, timeout,
+    )
 
     recon_results = {}
     tasks = []
-    def bounded(fn):
-        def run():
-            if not budget.consume():
-                return None
-            return fn()
-        return run
     if plan.get("dns") and dns and hostname:
         tasks.append(("dns", lambda: _get_dns(hostname), 5))
         tasks.append(("ptr", lambda: _get_ptr_records([result.ip] if result.ip else []), 5))
     if plan.get("ssl") and hostname and ((ssl_check and parsed.scheme == "https") or result.final_url.startswith("https")):
         final_parsed = urlparse(result.final_url)
-        tasks.append(("ssl", bounded(lambda: _get_ssl_info(final_parsed.hostname or hostname))))
+        tasks.append(("ssl", lambda: _get_ssl_info(final_parsed.hostname or hostname), 5))
     if plan.get("whois") and hostname:
         tasks.append(("whois", lambda: _get_whois(hostname), 5))
         if result.ip:
             tasks.append(("ip_whois", lambda: _get_ip_whois(result.ip), 5))
     if plan.get("mail") and hostname:
-        tasks.append(("mail", bounded(lambda: _get_mail_records(hostname))))
+        tasks.append(("mail", lambda: _get_mail_records(hostname), 5))
     if plan.get("subdomains") and hostname:
-        tasks.append(("subdomains", bounded(lambda: discover_subdomains(hostname))))
+        tasks.append(("subdomains", lambda: discover_subdomains(hostname), 8))
     if plan.get("ports") and hostname:
-        tasks.append(("ports", bounded(lambda: _scan_common_ports(hostname, timeout=max(1, min(3, timeout // 4))))) )
+        tasks.append(("ports", lambda: _scan_common_ports(hostname, timeout=max(1, min(3, timeout // 4))), 5))
     if plan.get("extra") and hostname:
-        tasks.append(("extra", bounded(lambda: ({
+        tasks.append(("extra", lambda: ({
             "directories": _enumerate_directories(result.final_url, result.headers, body, timeout=max(1, min(2, timeout // 4))),
             "intel": _fetch_public_intel(hostname, body),
-        }))))
+        }), 5))
     if plan.get("tech") and hostname:
-        tasks.append(("favicon", bounded(lambda: _get_favicon(result.final_url, body, timeout=max(1, min(3, timeout // 4))))) )
-    if plan.get("waf") and waf_probe and budget.consume():
-        tasks.append(("waf_probe", lambda: probe_waf(result.final_url, timeout=max(1, min(5, timeout)))))
-    if plan.get("api") and budget.consume():
-        tasks.append(("api", lambda: _probe_conventional_paths(result.final_url, timeout=max(1, min(3, timeout)))))
-    if plan.get("exposure") and budget.consume():
-        tasks.append(("exposure", lambda: _probe_exposure_paths(result.final_url, timeout=max(1, min(3, timeout)))))
+        tasks.append(("favicon", lambda: _get_favicon(result.final_url, body, timeout=max(1, min(3, timeout // 4))), 5))
     if crawl_pages > 0 and hostname:
         tasks.append(("crawl", lambda: _crawl_additional_pages(
             result.final_url, body, headers_to_send, max(1, min(5, timeout)), crawl_pages, use_katana=crawl_katana,
@@ -2372,34 +2430,46 @@ def scan(
         # harvest() fetches up to js_intel_bundles scripts sequentially inside one task.
         tasks.append(("js_intel", lambda: _run_js_intel(body, result.final_url, js_timeout, js_intel_bundles), (js_timeout * js_intel_bundles) + 10))
     if check_takeover and hostname:
-        tasks.append(("takeover", lambda: check_takeover_host(hostname, timeout=max(3, timeout)), max(10, timeout * 2)))
+        tk_timeout = max(8, timeout)
+        tasks.append(("takeover", lambda: _run_takeover_check(hostname, result.subdomains, result.dns_records, tk_timeout, scope_file), (tk_timeout * 4) + 10))
     if api_discovery and hostname:
-        tasks.append(("api_discovery", lambda: discover_api(result.final_url, timeout=max(3, timeout)), max(10, timeout * 4)))
+        api_timeout = max(6, timeout)
+        # probes a fixed list of ~13 paths sequentially - budget accordingly
+        tasks.append(("api_surface", lambda: _run_api_discovery(result.final_url, api_timeout), (api_timeout * 4) + 10))
     if email_security and hostname:
-        tasks.append(("email_security", lambda: analyze_email_security(hostname, timeout=max(2, timeout)), max(10, timeout * 8)))
-    if http_methods:
-        tasks.append(("http_posture", lambda: analyze_http_posture(result.headers, result.final_url, check_methods=True, timeout=max(3, timeout)), max(10, timeout * 2)))
+        em_timeout = max(2, min(5, timeout))
+        tasks.append(("email_security", lambda: _run_email_security(hostname, timeout), (em_timeout * 14) + 10))
     if active_subdomains and hostname:
-        tasks.append(("ext_subdomains", lambda: external_tools.run_subfinder(hostname, timeout=max(10, timeout * 3))))
+        ext_timeout = max(10, timeout * 3)
+        tasks.append(("ext_subdomains", lambda: external_tools.run_subfinder(hostname, timeout=ext_timeout), ext_timeout + 5))
     if active_ports and hostname:
-        tasks.append(("ext_ports", lambda: external_tools.active_port_scan(hostname, timeout=max(15, timeout * 4))))
+        ext_timeout = max(15, timeout * 4)
+        # active_port_scan can run naabu then nmap sequentially - budget for both.
+        tasks.append(("ext_ports", lambda: external_tools.active_port_scan(hostname, timeout=ext_timeout), (ext_timeout * 2) + 10))
     if nuclei_scan and hostname:
-        tasks.append(("ext_nuclei", lambda: external_tools.run_nuclei(result.final_url, severity=nuclei_severity, timeout=max(30, timeout * 6))))
+        ext_timeout = max(30, timeout * 6)
+        tasks.append(("ext_nuclei", lambda: external_tools.run_nuclei(result.final_url, severity=nuclei_severity, timeout=ext_timeout), ext_timeout + 5))
     if harvest_urls and hostname:
-        tasks.append(("ext_urls", lambda: external_tools.harvest_urls(hostname, result.final_url, timeout=max(15, timeout * 4))))
+        ext_timeout = max(15, timeout * 4)
+        # harvest_urls runs gau, waybackurls, and katana sequentially inside
+        # one task, so the executor must wait for up to 3x a single tool's
+        # timeout, not 1x - otherwise the future.result() wait can time out
+        # while the thread is still legitimately working through the list.
+        tasks.append(("ext_urls", lambda: external_tools.harvest_urls(hostname, result.final_url, timeout=ext_timeout), (ext_timeout * 3) + 10))
     if screenshot and hostname:
-        tasks.append(("ext_screenshot", lambda: external_tools.run_gowitness(result.final_url, screenshot_dir, timeout=max(10, timeout * 3))))
+        ext_timeout = max(10, timeout * 3)
+        tasks.append(("ext_screenshot", lambda: external_tools.run_gowitness(result.final_url, screenshot_dir, timeout=ext_timeout), ext_timeout + 5))
 
     if progress and tasks:
         report(f"enqueueing {len(tasks)} recon tasks")
 
     if progress and tasks:
-        for task in tasks:
-            report(f"running {task[0]} module")
+        for label, _, _ in tasks:
+            report(f"running {label} module")
 
     if tasks:
         with ThreadPoolExecutor(max_workers=min(6, len(tasks))) as executor:
-            futures = {executor.submit(task[1]): (task[0], task[2] if len(task) > 2 else 3) for task in tasks}
+            futures = {executor.submit(fn): (name, wait) for name, fn, wait in tasks}
             for future in as_completed(futures):
                 label, wait_seconds = futures[future]
                 try:
@@ -2441,14 +2511,15 @@ def scan(
     crawl_detections, crawl_pages_scanned = recon_results.get("crawl") or ([], [])
     _merge_crawl_and_favicon(result, recon_results.get("favicon"), crawl_detections, crawl_pages_scanned)
     _merge_js_intel(result, recon_results.get("js_intel"))
-    if recon_results.get("takeover"):
-        result.enriched["takeover_candidates"] = recon_results["takeover"]
-    if recon_results.get("api_discovery"):
-        result.enriched["api_surface"] = recon_results["api_discovery"]
-    if recon_results.get("email_security"):
-        result.enriched["email_security"] = recon_results["email_security"]
-    if recon_results.get("http_posture"):
-        result.enriched["http_posture"] = recon_results["http_posture"]
+    takeover_candidates = recon_results.get("takeover")
+    if takeover_candidates:
+        result.enriched["takeover_candidates"] = takeover_candidates
+    api_surface = recon_results.get("api_surface")
+    if api_surface:
+        result.enriched["api_surface"] = api_surface
+    email_posture = recon_results.get("email_security")
+    if email_posture:
+        result.enriched["email_security"] = email_posture
     external_results = _collect_external_tool_results(recon_results)
     if external_results:
         result.enriched["external_tools"] = external_results
@@ -2463,15 +2534,18 @@ def scan(
         result.extra_intel.setdefault("company", {})
         result.extra_intel["company"].update(company_intel)
         result.enriched.setdefault("company", company_intel)
-    from core.eol import check_technologies
-    eol_findings = check_technologies(result.technologies)
-    if eol_findings:
-        result.enriched["eol_technologies"] = eol_findings
-    result.enriched["risk"] = score_result(result)
 
     from core.plugins import run_plugins
     plugin_results = run_plugins(result, plugin_dirs, progress)
     if plugin_results:
         result.enriched["plugins"] = plugin_results
+    from core.eol import check_technologies
+    eol_findings = check_technologies(result.technologies)
+    if eol_findings:
+        result.enriched["eol_technologies"] = eol_findings
+
+    # Computed last so it sees every signal collected above.
+    from core.risk import score_result
+    result.enriched["risk"] = score_result(result)
 
     return result

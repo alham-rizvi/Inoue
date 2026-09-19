@@ -846,8 +846,7 @@ for name, signature in WEB_SERVER_SIGNATURES.items():
     if name not in SIGNATURES:
         SIGNATURES[name] = signature
 
-
-from fingerprints.modern_catalog import MODERN_SIGNATURES
+from fingerprints.modern_catalog import MODERN_SIGNATURES  # noqa: E402
 
 for name, signature in MODERN_SIGNATURES.items():
     if name in SIGNATURES:
@@ -863,8 +862,8 @@ for name, signature in MODERN_SIGNATURES.items():
                     current[key] = value
             else:
                 current[key] = value
-    else:
-        SIGNATURES[name] = signature
+        continue
+    SIGNATURES[name] = signature
 
 
 def _compile_pattern(value: Any) -> Any:
@@ -888,9 +887,45 @@ def _extract_literals(pattern: str) -> set[str]:
     return {token.lower() for token in tokens if len(token) >= 3}
 
 
+def _dedupe_pattern_list(values: list) -> list:
+    """Remove exact and case-insensitive-duplicate patterns from a signature's
+    pattern list before compiling.
+
+    This matters far more than it looks: the confidence-scoring formula in
+    core/scanner.py deliberately boosts confidence when *multiple different*
+    html patterns match, treating each as independent corroborating
+    evidence (e.g. a product name appearing in both a footer credit and a
+    distinct CSS class is genuinely two signals). But when a signature's
+    own pattern list contains the same literal word repeated several times
+    - a real, catalog-wide artifact found across the vast majority of
+    signatures (WooCommerce, Drupal, Joomla, and thousands more each list
+    the same word 3-7 times as if they were independent variants) - every
+    duplicate matches the SAME single occurrence in the page, and the
+    boost formula mistakes one weak substring mention for several
+    corroborating ones. A bare mention of a product name in unrelated
+    prose (a security write-up, a blog post) could reach "medium"
+    confidence purely from this duplication, not from any real signal
+    strength. Deduplicating here fixes the false-confidence inflation at
+    its source without touching the (otherwise correct) scoring formula.
+    """
+    if not isinstance(values, list):
+        return values
+    seen: set[str] = set()
+    deduped = []
+    for value in values:
+        key = value.lower() if isinstance(value, str) else str(value)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(value)
+    return deduped
+
+
 def _compile_signature(signature: dict) -> dict:
     compiled = {}
     for key, value in signature.items():
+        if key in {"html", "scripts", "paths", "cookies"}:
+            value = _dedupe_pattern_list(value)
         if key in {"headers", "cookies", "html", "scripts", "meta", "paths"}:
             compiled[key] = _compile_pattern(value)
         else:

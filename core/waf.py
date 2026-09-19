@@ -23,14 +23,6 @@ from __future__ import annotations
 import re
 
 
-class WAFFinding(dict):
-    """Mapping result with legacy attribute access for older integrations."""
-    def __getattr__(self, name):
-        try:
-            return self[name]
-        except KeyError as exc:
-            raise AttributeError(name) from exc
-
 class WAFDetection:
     __slots__ = ("name", "vendor", "category", "confidence", "evidence")
 
@@ -160,4 +152,4 @@ def detect_waf(headers: dict, cookies: dict) -> list[dict]:
         if matched_evidence:
             findings.append(WAFDetection(name, vendor, category, "medium", matched_evidence))
 
-    return [WAFFinding(f.to_dict()) for f in findings]
+    return [f.to_dict() for f in findings]

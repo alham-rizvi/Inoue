@@ -419,5 +419,88 @@ class SerializerExposesCrawlTests(unittest.TestCase):
         self.assertEqual(payload["crawl"], {})
 
 
+class DnsRecordsDisplayCrashTests(unittest.TestCase):
+    """Regression guard for a real, user-reported crash: render_result's
+    DNS section did `for v in values[:5]` assuming every dns_records
+    value is a list - but DNSSEC is stored as a dict ({"ds_present":
+    bool, "dnskey_present": bool}), and slicing a dict raises
+    `KeyError: slice(None, 5, None)`, not a TypeError, which crashed
+    --full-recon (and any scan with --dns) for every user."""
+
+    def _result_with_dnssec(self):
+        return ScanResult(
+            url="https://example.com", final_url="https://example.com", status_code=200, response_time_ms=1.0,
+            dns_records={"A": ["1.2.3.4"], "DNSSEC": {"ds_present": False, "dnskey_present": True}},
+        )
+
+    def test_render_result_does_not_crash_on_dnssec_dict(self):
+        from inoue import render_result
+        try:
+            render_result(self._result_with_dnssec(), verbose=False, evidence=False, modules=None)
+        except KeyError as exc:
+            self.fail(f"render_result crashed on a dict-valued DNS record: {exc!r}")
+
+    @patch("inoue.scan")
+    def test_full_recon_cli_does_not_crash_with_dnssec(self, mock_scan):
+        mock_scan.return_value = self._result_with_dnssec()
+        runner = CliRunner()
+        result = runner.invoke(app, ["--no-banner", "--full-recon", "example.com"], catch_exceptions=True)
+        self.assertIsNone(result.exception)
+        self.assertEqual(result.exit_code, 0)
+
+
+class DuplicatePatternConfidenceInflationTests(unittest.TestCase):
+    """Regression guard for a real, user-reported false positive: on a
+    security-research portfolio site with writeups mentioning tool/box
+    names (Apache NiFi, Pterodactyl), a single prose mention was scoring
+    'medium' confidence and appearing in scan results as if the site
+    were running that software. Root cause: 96.5% of the catalog (10,407
+    of 10,782 signatures) had the same literal word duplicated several
+    times within one signature's html pattern list - an artifact of how
+    the catalog was built/merged - and the scoring formula's "more
+    matching patterns means stronger corroboration" boost mistook
+    several duplicates of the same match for independent signals."""
+
+    def test_duplicate_html_patterns_are_removed_at_compile_time(self):
+        from fingerprints.signatures import _dedupe_pattern_list
+        self.assertEqual(_dedupe_pattern_list(["Nifi", "nifi", "Nifi", "NIFI"]), ["Nifi"])
+
+    def test_dedup_preserves_order_and_distinct_values(self):
+        from fingerprints.signatures import _dedupe_pattern_list
+        self.assertEqual(_dedupe_pattern_list(["a", "b", "a", "c", "B"]), ["a", "b", "c"])
+
+    def test_non_list_values_pass_through_unchanged(self):
+        from fingerprints.signatures import _dedupe_pattern_list
+        self.assertEqual(_dedupe_pattern_list("not-a-list"), "not-a-list")
+
+    def test_bare_prose_mention_scores_low_not_medium(self):
+        body = "In this writeup I exploited an Apache Nifi instance for a box, scoring 40 points."
+        detections = run_fingerprints({}, {}, body, url="https://example.com")
+        nifi = next((d for d in detections if d.name == "Nifi"), None)
+        self.assertIsNotNone(nifi)
+        self.assertEqual(nifi.confidence, "low")
+
+    def test_catalog_has_no_signature_with_unreduced_duplicate_html_patterns(self):
+        """Confirms the fix applies catalog-wide, not just to the two
+        examples found live - every compiled signature's html pattern
+        list must be free of case-insensitive duplicates."""
+        from fingerprints.signatures import COMPILED_SIGNATURES
+        offenders = []
+        for name, sig in COMPILED_SIGNATURES.items():
+            patterns = [p.pattern.lower() for p in sig.get("html", [])]
+            if len(patterns) != len(set(patterns)):
+                offenders.append(name)
+        self.assertEqual(offenders, [])
+
+    def test_genuine_multi_signal_detection_is_not_degraded(self):
+        """The fix must not weaken real corroborating multi-signal matches -
+        only collapse literal duplicates within one signature's own list."""
+        body = '<meta name="generator" content="WordPress 6.4.2"><link href="/wp-content/themes/x/style.css">'
+        detections = run_fingerprints({}, {}, body, url="https://example.com")
+        wp = next(d for d in detections if d.name == "WordPress")
+        self.assertEqual(wp.confidence, "medium")
+        self.assertEqual(wp.version, "6.4.2")
+
+
 if __name__ == "__main__":
     unittest.main()

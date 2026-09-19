@@ -46,6 +46,11 @@ class ScanRequest(BaseModel):
     screenshot_dir: str = Field("/tmp/inoue-screenshots", description="Directory to write gowitness screenshots to")
     js_intel: bool = Field(False, description="Fetch same-origin JS bundles and mine them for endpoints, hydration payloads, redacted secret patterns, and SPA framework signatures")
     js_intel_bundles: int = Field(3, ge=1, le=10, description="Max number of JS bundles to fetch and analyze with js_intel")
+    check_takeover: bool = Field(False, description="Check the target and discovered subdomains for subdomain-takeover candidates (read-only)")
+    api_discovery: bool = Field(False, description="Probe conventional API doc paths and check GraphQL introspection status")
+    email_security: bool = Field(False, description="Analyze SPF/DMARC/DKIM/MTA-STS posture from DNS records")
+    http_methods: bool = Field(False, description="Ask the server which HTTP methods it allows via a single OPTIONS request")
+    scope_file: Optional[str] = Field(None, description="Server-side path to a scope file; refuses to scan a target not in scope before making any request")
 
 
 class BatchRequest(BaseModel):
@@ -67,6 +72,11 @@ class BatchRequest(BaseModel):
     screenshot_dir: str = Field("/tmp/inoue-screenshots", description="Directory to write gowitness screenshots to")
     js_intel: bool = Field(False, description="Fetch same-origin JS bundles and mine them for endpoints, hydration payloads, redacted secret patterns, and SPA framework signatures")
     js_intel_bundles: int = Field(3, ge=1, le=10, description="Max number of JS bundles to fetch and analyze with js_intel")
+    check_takeover: bool = Field(False, description="Check each target and its discovered subdomains for subdomain-takeover candidates (read-only)")
+    api_discovery: bool = Field(False, description="Probe conventional API doc paths and check GraphQL introspection status per target")
+    email_security: bool = Field(False, description="Analyze SPF/DMARC/DKIM/MTA-STS posture from DNS records per target")
+    http_methods: bool = Field(False, description="Ask each server which HTTP methods it allows via a single OPTIONS request")
+    scope_file: Optional[str] = Field(None, description="Server-side path to a scope file; refuses to scan any target not in scope before making any request")
 
 
 def validate_public_target(target: str, allow_private: bool = False) -> None:
@@ -146,6 +156,11 @@ def create_app() -> Optional[FastAPI]:
             screenshot_dir=payload.screenshot_dir,
             js_intel=payload.js_intel,
             js_intel_bundles=payload.js_intel_bundles,
+            check_takeover=payload.check_takeover,
+            api_discovery=payload.api_discovery,
+            email_security=payload.email_security,
+            http_methods=payload.http_methods,
+            scope_file=payload.scope_file,
         )
         if payload.save_history and not result.error:
             from core.history import DEFAULT_HISTORY_PATH, record_snapshot
@@ -179,6 +194,11 @@ def create_app() -> Optional[FastAPI]:
             screenshot_dir=payload.screenshot_dir,
             js_intel=payload.js_intel,
             js_intel_bundles=payload.js_intel_bundles,
+            check_takeover=payload.check_takeover,
+            api_discovery=payload.api_discovery,
+            email_security=payload.email_security,
+            http_methods=payload.http_methods,
+            scope_file=payload.scope_file,
         )
         if payload.save_history:
             from core.history import DEFAULT_HISTORY_PATH, record_snapshot

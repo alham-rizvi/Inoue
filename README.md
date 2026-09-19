@@ -1,5 +1,5 @@
 <h1 align="center">
-  <img width="150" height="150" alt="Green Black Professional Minimal Fashion Brand Logo" src="https://github.com/user-attachments/assets/b2277aa7-5c74-4bb0-86bd-b7c98b5dbbbe" alt="Inoue" width="64" valign="middle" /> 
+  <img width="150" height="150" alt="Green Black Professional Minimal Fashion Brand Logo" src="https://github.com/user-attachments/assets/b2277aa7-5c74-4bb0-86bd-b7c98b5dbbbe" alt="Inoue" width="64" valign="middle" /> Inoue
 
 </h1>
 
@@ -28,19 +28,39 @@ It is useful for recon, CTF/HTB, bug bounty, internal network review, and genera
 
 Maintained by **Alham Rizvi**.
 
-## Version 1.5.3
+## Version 2.0.0
 
-The current release adds a safer release-ready recon workflow while keeping scanning read-only:
+A major recon and security-posture release, still fully read-only:
 
-- repeated watch scans and structured technology, CVE, port, and certificate diffs
-- generic, Slack, and Discord webhook payloads with verified HTTPS delivery
-- best-effort TLS metadata and known CDN/WAF fingerprint matching
-- optional FastAPI endpoints for health, signature, single-target, and batch scans
-- async/API scans preserve selected recon modules, use bounded request validation, and return the full scan result contract
-- shared Chrome and Firefox extension for detecting the active tab's web stack through the local Python API
-- Wappalyzer catalog normalization with duplicate compatibility checks
-- offline CVE correlation with optional EPSS scores and explicit refresh only
-- Python 3.12 CI coverage and PyPI package publishing through GitHub Actions
+- ~21,000-signature fingerprint catalog with aggressive version detection
+  (every version carries a `version_source` so a precisely-parsed value is
+  never confused with a best-effort guess)
+- technology end-of-life detection against a verified EOL table
+- JS bundle intelligence: fetches same-origin scripts and re-runs them
+  through the full catalog, closing the client-rendered/SPA detection gap,
+  plus redacted secret-pattern findings and endpoint extraction
+- WAF/CDN detection, security header grading, CORS misconfiguration
+  detection, cookie/CSP/redirect-chain/HTTP-method posture checks
+- SPF/DMARC/DKIM/MTA-STS email security analysis
+- subdomain takeover fingerprinting and API surface discovery (OpenAPI/
+  Swagger detection, GraphQL introspection status)
+- a triage risk score combining every signal above into one ordered view
+- scope guardrails (`--scope`): domain wildcard + CIDR matching, so recon
+  modules that fan out to discovered subdomains refuse to touch anything
+  outside a declared scope
+- optional orchestration of subfinder, naabu, nmap, nuclei, gau,
+  waybackurls, katana, and gowitness when installed, with graceful
+  degradation when they aren't
+- append-only scan history with timeline diffing
+- an MCP server (7 read-only tools, dual SDK support, stdio/SSE/
+  streamable-HTTP transports) and a FastAPI backend at parity with the CLI
+- the Chrome/Firefox extension, now with a proper toolbar icon
+
+See [CHANGELOG.md](CHANGELOG.md) for the full list, including three
+real bugs found via live testing and fixed at the root: a catalog-wide
+confidence-inflation issue affecting 96.5% of signatures, a crash in
+`--full-recon`'s DNS display, and a DNS-timeout-reported-as-absence issue
+in the email security module.
 
 The bundled offline CVE dataset is included in published wheels.
 
@@ -142,14 +162,14 @@ Optional FastAPI endpoints for health, signature, single-target, and batch scans
 ## Install
 
 ```bash
-python -m pip install inoue==1.5.3
+python -m pip install inoue==1.1.2
 inoue --help
 ```
 
 Install the optional API dependencies with:
 
 ```bash
-python -m pip install "inoue[api]==1.5.3"
+python -m pip install "inoue[api]==1.1.2"
 ```
 
 Install optional MCP support with:

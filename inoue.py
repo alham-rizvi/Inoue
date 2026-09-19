@@ -111,6 +111,40 @@ def render_result(result: ScanResult, verbose: bool = False, evidence: bool = Fa
             console.print(f"  [yellow]{entry['category']}[/yellow]  {entry['name']} [dim]({entry['evidence']})[/dim]")
         console.print()
 
+    eol_findings = result.enriched.get("eol_technologies")
+    if eol_findings:
+        console.print("  [dim]── end-of-life technologies ──────────[/dim]")
+        for item in eol_findings:
+            console.print(f"  [red]{item['name']} {item['version']}[/red] EOL since {item['eol_date']} ({item['days_past_eol']}d ago) [dim]source: {item['source']}[/dim]")
+        console.print()
+
+    risk = result.enriched.get("risk")
+    if risk and risk.get("factors"):
+        band_color = {"investigate-first": "red", "worth-a-look": "yellow", "low-signal": "dim"}.get(risk["band"], "dim")
+        console.print(f"  [dim]── triage ────────────────────────────[/dim]")
+        console.print(f"  [{band_color}]{risk['band']}[/{band_color}]  [dim]score {risk['score']}/100[/dim]")
+        for factor in risk["factors"][:6]:
+            console.print(f"    [dim]•[/dim] {factor['detail']}")
+        console.print()
+
+    takeovers = result.enriched.get("takeover_candidates")
+    if takeovers:
+        console.print("  [dim]── takeover candidates ───────────────[/dim]")
+        for item in takeovers:
+            console.print(f"  [red]{item['service']}[/red] {item['hostname']} [dim]({item['confidence']} confidence)[/dim]")
+        console.print("  [dim]candidates only - verify manually[/dim]")
+        console.print()
+
+    api_surface = result.enriched.get("api_surface") or {}
+    if api_surface.get("api_docs") or api_surface.get("graphql"):
+        console.print("  [dim]── API surface ───────────────────────[/dim]")
+        for doc in api_surface.get("api_docs", []):
+            console.print(f"  [cyan]{doc['kind']}[/cyan] {doc['url']}")
+        for gql in api_surface.get("graphql", []):
+            color = "red" if gql["introspection_enabled"] else "dim"
+            console.print(f"  [{color}]GraphQL[/{color}] {gql['url']} [dim]{gql['detail']}[/dim]")
+        console.print()
+
     security_grade = result.enriched.get("security_grade")
     if security_grade:
         score = security_grade["score"]
@@ -148,7 +182,12 @@ def render_result(result: ScanResult, verbose: bool = False, evidence: bool = Fa
             color = terminal_settings.colors.get(category, CATEGORY_COLORS.get(category, "white"))
             for i, t in enumerate(techs):
                 cat_label = f"[dim]{category}[/dim]" if i == 0 else ""
-                ver_label = f"[dim]{t.version or 'unknown'}[/dim]"
+                if t.version and t.version_source and t.version_source != "signature":
+                    # Mark aggressively-hunted versions with ~ so a guessed
+                    # version is never mistaken for a precisely-parsed one.
+                    ver_label = f"[yellow]~{t.version}[/yellow]"
+                else:
+                    ver_label = f"[dim]{t.version or 'unknown'}[/dim]"
                 conf_label = f"[dim]{t.confidence}[/dim]"
                 row = [cat_label, f"[{color}]{t.name}[/{color}]", ver_label, conf_label]
                 if evidence:
@@ -280,6 +319,13 @@ def render_result(result: ScanResult, verbose: bool = False, evidence: bool = Fa
     if result.dns_records and show_module("dns"):
         console.print("  [dim]── dns ───────────────────────────────[/dim]")
         for rtype, values in result.dns_records.items():
+            if rtype == "DNSSEC" and isinstance(values, dict):
+                status = "enabled" if values.get("ds_present") or values.get("dnskey_present") else "not detected"
+                console.print(f"  [cyan]{rtype:<8}[/cyan] {status} (DS={values.get('ds_present')}, DNSKEY={values.get('dnskey_present')})")
+                continue
+            if not isinstance(values, (list, tuple)):
+                console.print(f"  [cyan]{rtype:<8}[/cyan] {values}")
+                continue
             for v in values[:5]:
                 console.print(f"  [cyan]{rtype:<8}[/cyan] {v}")
         console.print()
@@ -379,10 +425,10 @@ def result_to_dict(result: ScanResult) -> dict:
                 "name": technology.name,
                 "category": technology.category,
                 "version": technology.version,
+                "version_source": technology.version_source,
                 "confidence": technology.confidence,
                 "confidence_score": technology.confidence_score,
                 "evidence": technology.evidence,
-                "version_source": technology.version_source,
                 "cves": technology.cves,
             }
             for technology in result.technologies
@@ -399,15 +445,18 @@ def result_to_dict(result: ScanResult) -> dict:
         "directories": result.directories,
         "extra_intel": result.extra_intel,
         "js_intel": result.enriched.get("js_intel", {}),
+        "takeover_candidates": result.enriched.get("takeover_candidates", []),
+        "api_surface": result.enriched.get("api_surface", {}),
+        "email_security": result.enriched.get("email_security", {}),
+        "http_posture": result.enriched.get("http_posture", {}),
         "eol_technologies": result.enriched.get("eol_technologies", []),
+        "risk": result.enriched.get("risk", {}),
         "security_grade": result.enriched.get("security_grade", {}),
         "cors_misconfig": result.enriched.get("cors_misconfig", []),
         "recon": result.enriched.get("recon", []) if result.enriched else [],
         "service_hints": result.enriched.get("service_hints", []) if result.enriched else [],
         "plugins": result.enriched.get("plugins", {}) if result.enriched else {},
         "enriched": result.enriched,
-        "waf": result.waf,
-        "js_intel": result.js_intel,
         "notes": result.notes,
         "error": result.error,
         "cache_hit": getattr(result, "cache_hit", False),
@@ -709,30 +758,23 @@ def main(
     cve_min_severity: Optional[str] = typer.Option(None, "--cve-min-severity", help="Minimum CVE severity: low, medium, high, or critical"),
     fail_on_cve: bool = typer.Option(False, "--fail-on-cve", help="Exit with code 2 when CVEs are found"),
     crawl: int = typer.Option(0, "--crawl", help="Fetch up to N additional same-origin pages to widen tech detection (0 disables)"),
-    scope_path: Optional[str] = typer.Option(None, "--scope", help="YAML/JSON scope file"),
-    max_requests: Optional[int] = typer.Option(None, "--max-requests", min=1, help="Maximum requests for one target"),
-    respect_robots: bool = typer.Option(True, "--respect-robots/--ignore-robots", help="Respect robots.txt during crawl"),
-    waf: bool = typer.Option(False, "--waf", help="Run passive WAF/CDN detection"),
-    waf_probe: bool = typer.Option(False, "--waf-probe", help="Opt-in benign unusual-path WAF probe"),
     crawl_katana: bool = typer.Option(False, "--crawl-katana", help="Use katana (if installed) as an extra crawl-candidate source alongside sitemap.xml and on-page links"),
     js_intel: bool = typer.Option(False, "--js-intel", help="Fetch same-origin JS bundles and mine them for endpoints, hydration payloads, redacted secret patterns, and SPA framework signatures the static HTML misses"),
     js_intel_bundles: int = typer.Option(3, "--js-intel-bundles", help="Max number of JS bundles to fetch and analyze with --js-intel"),
-    check_takeover: bool = typer.Option(False, "--check-takeover", help="Check discovered hosts for read-only subdomain-takeover candidates"),
-    api_discovery: bool = typer.Option(False, "--api-discovery", help="Probe conventional API documentation and GraphQL paths"),
-    email_security: bool = typer.Option(False, "--email-security", help="Analyze SPF, DMARC, DKIM, and MTA-STS posture"),
-    http_methods: bool = typer.Option(False, "--http-methods", help="Check allowed HTTP methods with one OPTIONS request"),
-    api_surface: bool = typer.Option(False, "--api-surface", help="Check conventional API paths"),
-    exposure: bool = typer.Option(False, "--exposure", help="Check bounded sensitive-file paths"),
-    export_params: Optional[str] = typer.Option(None, "--export-params", help="Write mined JS parameter names to FILE"),
+    check_takeover: bool = typer.Option(False, "--check-takeover", help="Check the target and discovered subdomains for subdomain-takeover candidates (read-only; never claims resources)"),
+    api_discovery: bool = typer.Option(False, "--api-discovery", help="Probe conventional API doc paths (swagger/openapi) and check whether GraphQL introspection is enabled"),
+    email_security: bool = typer.Option(False, "--email-security", help="Analyze SPF/DMARC/DKIM/MTA-STS posture from DNS records (fully passive)"),
+    http_methods: bool = typer.Option(False, "--http-methods", help="Ask the server which HTTP methods it allows via a single OPTIONS request"),
+    scope_file: Optional[str] = typer.Option(None, "--scope", help="Path to a scope file (in-scope/out-of-scope domains and CIDR ranges, one per line, '!' prefix for deny). Refuses to scan any target not in scope before making any request."),
     save_history: bool = typer.Option(False, "--save-history", help="Append this scan's result to the local history DB for later 'inoue history' timelines"),
     history_path: Optional[str] = typer.Option(None, "--history-path", help="SQLite history DB path (default ~/.cache/inoue/history.db)"),
-    active_subdomains: bool = typer.Option(False, "--active-subdomains", help="Run subfinder when installed"),
-    active_ports: bool = typer.Option(False, "--active-ports", help="Run naabu/nmap when installed"),
-    nuclei_scan: bool = typer.Option(False, "--nuclei", help="Run nuclei read-only templates when installed"),
-    nuclei_severity: Optional[str] = typer.Option(None, "--nuclei-severity", help="Nuclei severity filter"),
-    harvest_urls: bool = typer.Option(False, "--harvest-urls", help="Collect URLs with gau, waybackurls, and katana"),
-    screenshot: bool = typer.Option(False, "--screenshot", help="Capture a screenshot with gowitness when installed"),
-    screenshot_dir: str = typer.Option("/tmp/inoue-screenshots", "--screenshot-dir", help="Screenshot output directory"),
+    active_subdomains: bool = typer.Option(False, "--active-subdomains", help="Run subfinder for active subdomain enumeration (requires subfinder on PATH)"),
+    active_ports: bool = typer.Option(False, "--active-ports", help="Run naabu+nmap for real port/service scanning (requires naabu and/or nmap on PATH)"),
+    nuclei_scan: bool = typer.Option(False, "--nuclei", help="Auto-run nuclei vulnerability templates against the target (requires nuclei on PATH)"),
+    nuclei_severity: Optional[str] = typer.Option(None, "--nuclei-severity", help="Filter nuclei findings to one or more severities, e.g. 'high,critical'"),
+    harvest_urls: bool = typer.Option(False, "--harvest-urls", help="Collect historical + live URLs via gau, waybackurls, and katana (requires those tools on PATH)"),
+    screenshot: bool = typer.Option(False, "--screenshot", help="Capture a screenshot via gowitness (requires gowitness + Chrome/Chromium)"),
+    screenshot_dir: str = typer.Option("/tmp/inoue-screenshots", "--screenshot-dir", help="Directory to write gowitness screenshots to"),
 ):
     """
     Inoue — tech stack fingerprinting CLI
@@ -857,7 +899,7 @@ def main(
             console.print("[yellow]TLS fingerprinting unavailable[/yellow]: optional TLS tooling is not installed; skipping best-effort metadata capture.")
             tls_fingerprint = False
 
-    if any([service, headers, dns, ssl, whois, subdomains, mail, ports, extra, fast, full_recon, all_modules, smart, active, passive, company, cve, waf, waf_probe, js_intel, api_surface, exposure, active_subdomains, active_ports, nuclei_scan, harvest_urls, screenshot, check_takeover, api_discovery, email_security, http_methods]) and modules is None:
+    if any([service, headers, dns, ssl, whois, subdomains, mail, ports, extra, fast, full_recon, all_modules, smart, active, passive, company, cve]) and modules is None:
         modules = []
     if modules is not None:
         modules = [m.lower() for m in modules]
@@ -898,16 +940,6 @@ def main(
         modules.append("company")
     if cve:
         modules.append("cve")
-    if waf or waf_probe:
-        modules.append("waf")
-    if js_intel:
-        modules.append("js-intel")
-    if api_surface:
-        modules.append("api")
-    if exposure:
-        modules.append("exposure")
-    if export_params and "js-intel" not in modules:
-        modules.append("js-intel")
 
     if modules == []:
         modules = None
@@ -967,6 +999,7 @@ def main(
                 api_discovery=api_discovery,
                 email_security=email_security,
                 http_methods=http_methods,
+                scope_file=scope_file,
                 active_subdomains=active_subdomains,
                 active_ports=active_ports,
                 nuclei_scan=nuclei_scan,
@@ -996,10 +1029,11 @@ def main(
                         crawl_katana=crawl_katana,
                         js_intel=js_intel,
                         js_intel_bundles=js_intel_bundles,
-                check_takeover=check_takeover,
-                api_discovery=api_discovery,
-                email_security=email_security,
-                http_methods=http_methods,
+                        check_takeover=check_takeover,
+                        api_discovery=api_discovery,
+                        email_security=email_security,
+                        http_methods=http_methods,
+                        scope_file=scope_file,
                         active_subdomains=active_subdomains,
                         active_ports=active_ports,
                         nuclei_scan=nuclei_scan,
@@ -1037,11 +1071,6 @@ def main(
                 console.print(f"  [yellow]history save failed[/yellow] for {result.url}: {exc}")
         if saved_count and not json_out:
             console.print(f"  [green]saved[/green] {saved_count} snapshot(s) to {db_path}")
-    if export_params:
-        params = sorted({p for result in results for p in result.js_intel.get("parameters", [])})
-        Path(export_params).write_text("\n".join(params) + ("\n" if params else ""), encoding="utf-8")
-        if not json_out:
-            console.print(f"  [green]saved[/green] {len(params)} parameters to {export_params}")
 
     if nuclei_out:
         try:
