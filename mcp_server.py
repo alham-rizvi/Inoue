@@ -157,6 +157,15 @@ def get_scan_history(target: str, limit: int = 10) -> list[dict[str, Any]]:
     return [{"scanned_at": s["scanned_at"], "technology_count": len(s["result"].get("technologies", []))} for s in snapshots]
 
 
+def check_technology_eol(name: str, version: str) -> dict[str, Any]:
+    """Check a technology/version against Inoue's static EOL table."""
+    from core.eol import check_eol
+    result = check_eol(name, version)
+    if result is None:
+        return {"checked": False, "name": name, "version": version}
+    return {"checked": True, **result}
+
+
 if MCPServerBase is not None:  # pragma: no cover - exercised by MCP clients
     mcp = MCPServerBase("inoue")
 
@@ -189,6 +198,11 @@ if MCPServerBase is not None:  # pragma: no cover - exercised by MCP clients
     def get_scan_history_tool(target: str, limit: int = 10) -> str:
         """Read previously saved scan history for a target from the local history DB. Never triggers a new scan."""
         return json.dumps(get_scan_history(target, limit), sort_keys=True)
+
+    @mcp.tool()
+    def check_eol_tool(name: str, version: str) -> str:
+        """Check a technology name and version against Inoue's static end-of-life table. No network requests."""
+        return json.dumps(check_technology_eol(name, version), sort_keys=True)
 else:
     mcp = None
 

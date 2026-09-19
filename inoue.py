@@ -382,6 +382,7 @@ def result_to_dict(result: ScanResult) -> dict:
                 "confidence": technology.confidence,
                 "confidence_score": technology.confidence_score,
                 "evidence": technology.evidence,
+                "version_source": technology.version_source,
                 "cves": technology.cves,
             }
             for technology in result.technologies

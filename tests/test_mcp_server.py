@@ -100,7 +100,7 @@ class ToolRegistrationTests(unittest.TestCase):
         names = {t.name for t in tools}
         self.assertEqual(names, {
             "search_catalog", "get_catalog_summary", "scan_read_only",
-            "check_waf_tool", "check_security_headers_tool", "get_scan_history_tool",
+            "check_waf_tool", "check_security_headers_tool", "get_scan_history_tool", "check_eol_tool",
         })
 
     @unittest.skipUnless(mcp_server.mcp is not None, "optional mcp SDK is not installed")
@@ -112,6 +112,11 @@ class ToolRegistrationTests(unittest.TestCase):
 
 
 class CatalogToolTests(unittest.TestCase):
+    def test_check_technology_eol_is_offline_and_explicit_for_unknowns(self):
+        from mcp_server import check_technology_eol
+        self.assertTrue(check_technology_eol("PHP", "7.4.3")["checked"])
+        self.assertFalse(check_technology_eol("Unknown", "1.0")["checked"])
+
     def test_search_signatures_is_catalog_only_no_network(self):
         matches = search_signatures("nginx")
         self.assertTrue(len(matches) >= 1)

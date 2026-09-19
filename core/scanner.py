@@ -61,6 +61,7 @@ class Detection:
     confidence_score: float = 0.0
     evidence: str = ""
     cves: list[dict] = field(default_factory=list)
+    version_source: str = ""
 
 
 @dataclass
@@ -157,6 +158,44 @@ def _extract_version(pattern: str, text: str) -> Optional[str]:
     except re.error:
         pass
     return None
+
+
+def _slugify_tech_name(name: str) -> list[str]:
+    lowered = name.lower().strip()
+    cleaned = re.sub(r"[^a-z0-9]+", " ", lowered).strip()
+    if not cleaned:
+        return []
+    words = cleaned.split()
+    forms = {"-".join(words), "_".join(words), "".join(words), ".".join(words)}
+    if len(words) > 1:
+        forms.add(words[0])
+    return [form for form in forms if len(form) >= 3]
+
+_VERSION_NEAR_NAME_TEMPLATES = [
+    r"{name}[^a-z0-9]{{0,3}}v?(\d+(?:\.\d+){{1,3}})",
+    r"v?(\d+(?:\.\d+){{1,3}})[^a-z0-9]{{0,3}}{name}",
+    r"{name}[^;\n]{{0,40}}?version[\"'\s:=]+v?(\d+(?:\.\d+){{1,3}})",
+]
+
+def _aggressive_version_hunt(tech_name: str, body: str, scripts: list[str], headers: dict) -> tuple[Optional[str], str]:
+    """Best-effort version discovery, explicitly labelled as guessed provenance."""
+    forms = _slugify_tech_name(tech_name)
+    haystacks = [("script-url", " ".join(scripts)), ("header", " ".join(f"{k}: {v}" for k, v in (headers or {}).items())), ("html-near-name", body or "")]
+    for source, haystack in haystacks:
+        lowered = haystack.lower()
+        for form in forms:
+            if form not in lowered:
+                continue
+            for template in _VERSION_NEAR_NAME_TEMPLATES:
+                try:
+                    match = re.search(template.format(name=re.escape(form)), lowered, re.IGNORECASE)
+                except re.error:
+                    continue
+                if match:
+                    version = _normalize_version(match.group(1))
+                    if version:
+                        return version, source
+    return None, ""
 
 
 def _extract_deep_version(text: str) -> Optional[str]:
@@ -1317,6 +1356,7 @@ def build_service_summary(result: ScanResult) -> list[dict]:
             "confidence": tech.confidence,
             "confidence_score": tech.confidence_score,
             "evidence": tech.evidence,
+            "version_source": tech.version_source,
         })
     return summary
 
@@ -1871,6 +1911,7 @@ def build_recon_summary(result: ScanResult) -> list[dict]:
             "version": tech.version or "unknown",
             "confidence": tech.confidence,
             "evidence": tech.evidence,
+            "version_source": tech.version_source,
             "service_hints": hints,
         })
     return services
@@ -1979,6 +2020,7 @@ def run_fingerprints(
     url: str = "",
     progress: Optional[Callable[[str], None]] = None,
     sources: Optional[set[str]] = None,
+    version_hunt: bool = True,
 ) -> list[Detection]:
     def report(message: str):
         if progress:
@@ -2072,6 +2114,9 @@ def run_fingerprints(
 
         if matched:
             if tech_name not in seen_names:
+                version_source = "signature" if version else ""
+                if not version and version_hunt:
+                    version, version_source = _aggressive_version_hunt(tech_name, body, scripts, headers)
                 detections.append(Detection(
                     name=tech_name,
                     category=category,
@@ -2079,6 +2124,7 @@ def run_fingerprints(
                     confidence=confidence,
                     confidence_score=confidence_score,
                     evidence=evidence,
+                    version_source=version_source,
                 ))
                 seen_names.add(tech_name)
                 report(f"detected {tech_name} ({category})")

@@ -1,6 +1,6 @@
 [project]
 name = "inoue"
-version = "1.5.3"
+version = "2.0.0"
 description = "Inoue — fast tech stack fingerprinting CLI"
 readme = {file = "README.md", content-type = "text/markdown"}
 authors = [{name = "Alham Rizvi"}]
