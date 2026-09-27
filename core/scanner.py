@@ -2159,12 +2159,11 @@ def run_fingerprints(
 
         if candidates:
             matched = True
-            best_rank, best_version, best_evidence = max(candidates, key=lambda item: item[0])
+            _, best_version, best_evidence = max(candidates, key=lambda item: item[0])
             version = best_version
             evidence = best_evidence
-            for rank, candidate_version, candidate_evidence in sorted(candidates, key=lambda item: item[0], reverse=True):
+            for _rank, candidate_version, candidate_evidence in sorted(candidates, key=lambda item: item[0], reverse=True):
                 if candidate_version:
-                    best_rank = rank
                     version = candidate_version
                     evidence = candidate_evidence
                     break
