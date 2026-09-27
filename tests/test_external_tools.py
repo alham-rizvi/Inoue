@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from core import external_tools as et
-from core.scanner import Detection, ScanResult, _collect_external_tool_results, scan
+from core.scanner import _collect_external_tool_results, scan
 
 
 class ToolAvailabilityTests(unittest.TestCase):

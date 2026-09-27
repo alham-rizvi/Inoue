@@ -1,6 +1,6 @@
 import asyncio
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 from core.scanner import Detection, ScanResult
 from api.main import BatchRequest, ScanRequest, create_app

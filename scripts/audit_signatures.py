@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 from datetime import date, datetime, timedelta
-from typing import Iterable
 
 from fingerprints.signatures import SIGNATURES
 

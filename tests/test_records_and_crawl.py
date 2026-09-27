@@ -2,15 +2,12 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from core.scanner import (
-    Detection,
-    ScanResult,
     _check_dnssec,
     _extract_crawl_candidates,
     _extract_katana_candidates,
     _extract_sitemap_candidates,
     _get_ip_whois,
     _get_ptr_records,
-    scan,
 )
 
 
