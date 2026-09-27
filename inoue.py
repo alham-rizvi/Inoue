@@ -12,18 +12,17 @@ import json
 import asyncio
 import concurrent.futures
 import html
+import importlib
 import re
 import subprocess
 import sys
 import time
 from collections import defaultdict
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Optional
 
 import typer
-from rich.console import Console
 from rich.table import Table
-from rich import box
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from core.cve import refresh_cve_dataset
@@ -878,7 +877,11 @@ def main(
 
     if tls_fingerprint:
         try:
-            from core.tls_fingerprint import extract_tls_metadata
+            # Availability probe: the module is referenced again only inside
+            # maybe_capture_tls, where it is re-imported for actual use.
+            # import_module runs the module's init (so internal failures
+            # still surface) without binding an unused name here.
+            importlib.import_module("core.tls_fingerprint")
         except Exception:
             console.print("[yellow]TLS fingerprinting unavailable[/yellow]: optional TLS tooling is not installed; skipping best-effort metadata capture.")
             tls_fingerprint = False
