@@ -17,7 +17,6 @@ deliverability - that would be testing, not recon.
 from __future__ import annotations
 
 import re
-from typing import Optional
 
 # Common DKIM selectors published by major providers. Checking a short
 # fixed list is cheap; absence here does NOT mean DKIM is unconfigured,

@@ -12,8 +12,6 @@ not a full security audit.
 
 from __future__ import annotations
 
-import re
-
 # (header name, why it matters) - presence is checked case-insensitively;
 # for CSP and Permissions-Policy, an empty or clearly-too-permissive value
 # is treated the same as "missing" since an empty policy provides no

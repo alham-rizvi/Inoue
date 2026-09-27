@@ -30,9 +30,8 @@ before.
 
 from __future__ import annotations
 
-import json
 import re
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urljoin
 
 import httpx
 

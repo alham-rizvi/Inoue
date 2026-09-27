@@ -20,7 +20,6 @@ is replayed, no CSP bypass is attempted.
 from __future__ import annotations
 
 import re
-from typing import Optional
 from urllib.parse import urlsplit
 
 import httpx
