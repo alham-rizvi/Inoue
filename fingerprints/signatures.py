@@ -4,7 +4,6 @@ Each entry maps a technology to detection rules across headers, cookies, HTML, s
 """
 
 import re
-from re import Pattern
 from typing import Any
 
 from fingerprints.extended_catalog import EXTENDED_SIGNATURES
