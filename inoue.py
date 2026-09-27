@@ -221,23 +221,6 @@ def render_result(result: ScanResult, verbose: bool = False, evidence: bool = Fa
             console.print("  [dim]no enrichment data[/dim]")
         console.print()
 
-    if result.whois_info and verbose:
-        console.print("  [dim]── whois ─────────────────────────────[/dim]")
-        if result.whois_summary:
-            for key in ["domain", "company", "registrant", "country", "registrar", "creation_date", "expiration_date"]:
-                value = result.whois_summary.get(key)
-                if value:
-                    console.print(f"  [cyan]{key}[/cyan] {value}")
-            if result.whois_summary.get("nameservers"):
-                console.print(f"  [cyan]nameservers[/cyan] {', '.join(result.whois_summary['nameservers'][:6])}")
-        else:
-            for key, value in result.whois_info.items():
-                if isinstance(value, list):
-                    console.print(f"  [cyan]{key}[/cyan] {', '.join(str(v) for v in value[:5])}")
-                else:
-                    console.print(f"  [cyan]{key}[/cyan] {value}")
-        console.print()
-
     if result.mail_records and show_module("mail"):
         console.print("  [dim]── mail records ─────────────────────[/dim]")
         for item in result.mail_records:
