@@ -7,12 +7,12 @@ Core scanning engine - fetches target and runs all detections concurrently.
 
 import os
 import asyncio
+import importlib.util
 import json
 import ipaddress
 import re
 import socket
 import ssl
-import subprocess
 import time
 from contextlib import redirect_stderr
 from io import StringIO
@@ -35,7 +35,6 @@ from core.security_grade import detect_cors_misconfig, grade_security_headers
 
 from fingerprints.signatures import (
     COMPILED_SIGNATURES,
-    SIGNATURES,
     SIGNATURES_BY_HEADER,
     SIGNATURES_BY_META,
     SIGNATURES_BY_COOKIE_TOKEN,
@@ -402,13 +401,18 @@ def _get_ssl_info(hostname: str) -> dict:
             })
 
             try:
-                import sslyze  # type: ignore
-                payload["sslyze_available"] = True
-                payload["sslyze"] = {
-                    "protocols": [s.version()],
-                    "cipher": s.cipher()[0] if s.cipher() else "",
-                    "certificate_subject": payload.get("subject", {}),
-                }
+                # Availability probe only - the sslyze binding was never
+                # referenced after import, so find_spec is the right tool
+                # (checks findability without running the module's init).
+                if importlib.util.find_spec("sslyze") is not None:
+                    payload["sslyze_available"] = True
+                    payload["sslyze"] = {
+                        "protocols": [s.version()],
+                        "cipher": s.cipher()[0] if s.cipher() else "",
+                        "certificate_subject": payload.get("subject", {}),
+                    }
+                else:
+                    payload["sslyze_available"] = False
             except Exception:
                 payload["sslyze_available"] = False
 
