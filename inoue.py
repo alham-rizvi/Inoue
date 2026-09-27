@@ -122,7 +122,7 @@ def render_result(result: ScanResult, verbose: bool = False, evidence: bool = Fa
     risk = result.enriched.get("risk")
     if risk and risk.get("factors"):
         band_color = {"investigate-first": "red", "worth-a-look": "yellow", "low-signal": "dim"}.get(risk["band"], "dim")
-        console.print(f"  [dim]── triage ────────────────────────────[/dim]")
+        console.print("  [dim]── triage ────────────────────────────[/dim]")
         console.print(f"  [{band_color}]{risk['band']}[/{band_color}]  [dim]score {risk['score']}/100[/dim]")
         for factor in risk["factors"][:6]:
             console.print(f"    [dim]•[/dim] {factor['detail']}")
