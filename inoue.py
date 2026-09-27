@@ -15,6 +15,7 @@ import html
 import re
 import subprocess
 import sys
+import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Callable, Optional
@@ -948,7 +949,12 @@ def main(
         def callback(message: str):
             if json_out:
                 return
-            console.log(f"[dim]{target}[/dim] {message}")
+            # console.log() would tag every progress line with this file's
+            # closure line (inoue.py:<N>) as the "source", which is static
+            # and meaningless because the call site is always the same
+            # nested callback. Print with an explicit timestamp instead so
+            # the line stays a useful persistent record without the noise.
+            console.print(f"[dim]{time.strftime('%H:%M:%S')}[/dim] {target} {message}")
             progress.update(task_id, description=f"  scanning {target}: {message}")
         return callback
 
