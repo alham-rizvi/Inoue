@@ -27,7 +27,14 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from core.cve import refresh_cve_dataset
 from core.config import load_config
-from core.scanner import build_service_summary, scan, scan_many, ScanResult
+from core.scanner import (
+    VALID_RECON_MODULES,
+    build_service_summary,
+    scan,
+    scan_many,
+    ScanResult,
+    unknown_recon_modules,
+)
 from core.terminal import TerminalSettings, create_console, load_terminal_settings
 
 app = typer.Typer(help="Inoue — tech stack fingerprinting CLI", add_completion=False)
@@ -947,6 +954,14 @@ def main(
         modules = []
     if modules is not None:
         modules = [m.lower() for m in modules]
+        unknown = unknown_recon_modules(modules)
+        if unknown:
+            emit_cli_error(
+                f"Unknown recon module(s): {', '.join(unknown)}",
+                detail="Valid modules: " + ", ".join(sorted(VALID_RECON_MODULES)),
+                hint="Run 'inoue --help' for the module list and presets.",
+                exit_code=2,
+            )
     else:
         modules = []
 

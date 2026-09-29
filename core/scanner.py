@@ -575,23 +575,58 @@ SMART_TOKENS = {
 }
 
 
+RECON_MODULE_NAMES = (
+    "headers",
+    "dns",
+    "ssl",
+    "whois",
+    "subdomains",
+    "mail",
+    "tech",
+    "ports",
+    "extra",
+    "smart",
+    "active",
+    "passive",
+    "company",
+    "cve",
+)
+
+RECON_MODULE_PRESETS = ("fast", "full-recon", "all")
+
+# Alternate spellings build_recon_plan already understands. Kept beside the
+# planner so the CLI validator and the planner can never drift apart.
+RECON_MODULE_ALIASES = {
+    "fast-scan": "fast",
+    "fast_scan": "fast",
+    "smart-detect": "smart",
+    "smart_detect": "smart",
+    "active-recon": "active",
+    "active_recon": "active",
+    "passive-recon": "passive",
+    "passive_recon": "passive",
+    "site": "company",
+    "organization": "company",
+    "cves": "cve",
+    "intel": "extra",
+}
+
+VALID_RECON_MODULES = frozenset(RECON_MODULE_NAMES) | frozenset(RECON_MODULE_PRESETS) | frozenset(RECON_MODULE_ALIASES)
+
+
+def unknown_recon_modules(requested: Optional[list[str]]) -> list[str]:
+    """Return requested module names that build_recon_plan would ignore.
+
+    An unrecognised name currently produces an empty recon plan and silently
+    skips fingerprint matching, so callers should reject these before scanning.
+    """
+    return sorted(
+        {str(name).lower() for name in (requested or []) if str(name).lower() not in VALID_RECON_MODULES}
+    )
+
+
 def build_recon_plan(requested: Optional[list[str]] = None) -> dict:
-    modules = {
-        "headers": False,
-        "dns": False,
-        "ssl": False,
-        "whois": False,
-        "subdomains": False,
-        "mail": False,
-        "tech": False,
-        "ports": False,
-        "extra": False,
-        "smart": False,
-        "active": False,
-        "passive": False,
-        "company": False,
-        "cve": False,
-    }
+    modules = {name: False for name in RECON_MODULE_NAMES}
     if not requested:
         modules.update({"headers": True, "tech": True, "smart": True})
         return modules

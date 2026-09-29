@@ -31,6 +31,7 @@ from core.scanner import (
     merge_subdomain_candidates,
     summarize_whois_details,
     run_fingerprints,
+    unknown_recon_modules,
 )
 from core.cve import correlate_cves, refresh_cve_dataset
 from core.config import load_config
@@ -528,6 +529,23 @@ class ScannerSummaryTests(unittest.TestCase):
         self.assertFalse(plan["cve"])
         self.assertFalse(plan["tech"])
 
+    def test_every_valid_module_name_produces_a_non_empty_plan(self):
+        from core.scanner import VALID_RECON_MODULES
+
+        for name in sorted(VALID_RECON_MODULES):
+            with self.subTest(module=name):
+                self.assertEqual(unknown_recon_modules([name]), [])
+                self.assertTrue(
+                    any(build_recon_plan([name]).values()),
+                    f"module {name!r} is advertised as valid but builds an empty plan",
+                )
+
+    def test_unknown_recon_modules_are_reported(self):
+        self.assertEqual(unknown_recon_modules(["bogus-module"]), ["bogus-module"])
+        self.assertEqual(unknown_recon_modules(["fast", "not-a-module", "ALSO-BOGUS"]), ["also-bogus", "not-a-module"])
+        self.assertEqual(unknown_recon_modules(None), [])
+        self.assertEqual(unknown_recon_modules(["headers", "tech", "full-recon"]), [])
+
     def test_build_recon_plan_supports_fast_preset(self):
         plan = build_recon_plan(["fast"])
 
@@ -633,6 +651,30 @@ class ScannerSummaryTests(unittest.TestCase):
         result = CliRunner().invoke(app, ["--no-banner", "example.com"], catch_exceptions=False)
 
         self.assertEqual(result.exit_code, 0)
+
+    def test_cli_rejects_unknown_module_name(self):
+        result = CliRunner().invoke(
+            app, ["--module", "bogus-module", "--no-banner", "example.com"], catch_exceptions=False
+        )
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("bogus-module", result.stdout)
+        self.assertIn("Valid modules", result.stdout)
+
+    @patch("inoue.scan")
+    def test_cli_accepts_valid_module_name(self, mock_scan):
+        mock_scan.return_value = ScanResult(
+            url="https://example.com",
+            final_url="https://example.com",
+            status_code=200,
+            response_time_ms=1,
+        )
+
+        result = CliRunner().invoke(app, ["--module", "fast", "--no-banner", "example.com"], catch_exceptions=False)
+
+        self.assertEqual(result.exit_code, 0)
+        _, kwargs = mock_scan.call_args
+        self.assertEqual(kwargs["modules"], ["fast"])
 
     def test_cli_missing_scope_file_fails_closed_without_scanning(self):
         result = CliRunner().invoke(
