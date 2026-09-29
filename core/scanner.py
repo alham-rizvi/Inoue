@@ -787,10 +787,10 @@ def _get_rdap_details(hostname: str) -> dict:
             record = {"handle": entity.get("handle"), "roles": entity.get("roles", [])}
             vcard = entity.get("vcardArray")
             if isinstance(vcard, list) and len(vcard) > 1 and isinstance(vcard[1], list):
-                for field in vcard[1]:
-                    if not isinstance(field, list) or len(field) < 4:
+                for vcard_entry in vcard[1]:
+                    if not isinstance(vcard_entry, list) or len(vcard_entry) < 4:
                         continue
-                    name, value = field[0], field[3]
+                    name, value = vcard_entry[0], vcard_entry[3]
                     if name in {"fn", "org", "email", "tel", "adr"} and value:
                         record[name] = value
             entities.append({key: value for key, value in record.items() if value})
