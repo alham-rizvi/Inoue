@@ -1,3 +1,16 @@
+"""Optional FastAPI backend for Inoue.
+
+Exposes the read-only scan engine over HTTP (``GET /health``,
+``GET /signatures``, ``POST /scan``, ``POST /scan/batch``) so the browser
+extension and other MCP-style clients can reuse it. FastAPI, pydantic and
+uvicorn are optional extras (see the ``api`` extra in pyproject.toml): when
+they are missing, ``create_app()`` returns ``None`` and the importable
+request/response models fall back to plain stand-ins so that
+``import api.main`` still succeeds. Optional API-key auth and an in-memory
+per-client rate limit are configured through the ``INOUE_API_KEY`` and
+``INOUE_API_RATE_LIMIT`` environment variables.
+"""
+
 from __future__ import annotations
 
 import asyncio
