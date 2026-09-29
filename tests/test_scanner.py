@@ -37,7 +37,7 @@ from core.cve import correlate_cves, refresh_cve_dataset
 from core.config import load_config
 from core.plugins import run_plugins
 from fingerprints.signatures import SIGNATURES
-from inoue import app, format_update_report, load_targets, render_html_report, result_exit_code, result_to_dict, write_nuclei_export
+from inoue import app, build_webhook_payload, deliver_webhooks, format_update_report, load_targets, render_html_report, result_exit_code, result_to_dict, write_nuclei_export
 
 
 class ScannerSummaryTests(unittest.TestCase):
@@ -1065,6 +1065,129 @@ class WatchCommandTests(unittest.TestCase):
         self.assertEqual(result.exit_code, 0)
         mock_record.assert_called_once()
         self.assertEqual(mock_record.call_args[0][0], "/tmp/inoue-watch-test.db")
+
+
+class WebhookDeliveryTests(unittest.TestCase):
+    """--webhook-url must post scan results and never break the scan on failure."""
+
+    @staticmethod
+    def _result() -> ScanResult:
+        return ScanResult(
+            url="https://example.com",
+            final_url="https://example.com",
+            status_code=200,
+            response_time_ms=1,
+            technologies=[
+                Detection("Apache", "Web Server", cves=[{"id": "CVE-TEST", "severity": "high", "summary": "test"}]),
+            ],
+        )
+
+    @patch("inoue.send_webhook")
+    @patch("inoue.scan")
+    def test_cli_posts_generic_payload_when_webhook_url_given(self, mock_scan, mock_send):
+        mock_scan.return_value = self._result()
+
+        result = CliRunner().invoke(
+            app,
+            ["--no-banner", "--webhook-url", "http://127.0.0.1:9/hook", "example.com"],
+            catch_exceptions=False,
+        )
+
+        self.assertEqual(result.exit_code, 0)
+        mock_send.assert_called_once()
+        url, payload = mock_send.call_args[0]
+        self.assertEqual(url, "http://127.0.0.1:9/hook")
+        self.assertEqual(payload["url"], "https://example.com")
+        self.assertEqual(payload["technologies"], ["Apache"])
+        self.assertEqual(payload["cves"], ["CVE-TEST"])
+        self.assertIn("webhook delivered", result.stdout)
+
+    @patch("inoue.send_webhook")
+    @patch("inoue.scan")
+    def test_cli_posts_slack_payload_for_slack_format(self, mock_scan, mock_send):
+        mock_scan.return_value = self._result()
+
+        result = CliRunner().invoke(
+            app,
+            ["--no-banner", "--webhook-url", "http://127.0.0.1:9/hook", "--webhook-format", "slack", "example.com"],
+            catch_exceptions=False,
+        )
+
+        self.assertEqual(result.exit_code, 0)
+        _, payload = mock_send.call_args[0]
+        self.assertIn("text", payload)
+        self.assertIn("Apache", payload["text"])
+
+    @patch("inoue.send_webhook")
+    @patch("inoue.scan")
+    def test_cli_posts_discord_payload_for_discord_format(self, mock_scan, mock_send):
+        mock_scan.return_value = self._result()
+
+        result = CliRunner().invoke(
+            app,
+            ["--no-banner", "--webhook-url", "http://127.0.0.1:9/hook", "--webhook-format", "discord", "example.com"],
+            catch_exceptions=False,
+        )
+
+        self.assertEqual(result.exit_code, 0)
+        _, payload = mock_send.call_args[0]
+        self.assertIn("embeds", payload)
+
+    @patch("inoue.send_webhook")
+    @patch("inoue.scan")
+    def test_cli_webhook_failure_does_not_fail_the_scan(self, mock_scan, mock_send):
+        mock_scan.return_value = self._result()
+        mock_send.side_effect = RuntimeError("connection refused")
+
+        result = CliRunner().invoke(
+            app,
+            ["--no-banner", "--webhook-url", "http://127.0.0.1:9/hook", "example.com"],
+            catch_exceptions=False,
+        )
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("webhook delivery failed", result.stdout)
+        self.assertIn("services detected", result.stdout)
+
+    @patch("inoue.send_webhook")
+    @patch("inoue.scan")
+    def test_cli_does_not_post_without_webhook_url(self, mock_scan, mock_send):
+        mock_scan.return_value = self._result()
+
+        result = CliRunner().invoke(app, ["--no-banner", "example.com"], catch_exceptions=False)
+
+        self.assertEqual(result.exit_code, 0)
+        mock_send.assert_not_called()
+
+    @patch("inoue.scan")
+    def test_cli_rejects_unknown_webhook_format(self, mock_scan):
+        mock_scan.return_value = self._result()
+
+        result = CliRunner().invoke(
+            app,
+            ["--no-banner", "--webhook-url", "http://127.0.0.1:9/hook", "--webhook-format", "nope", "example.com"],
+            catch_exceptions=False,
+        )
+
+        self.assertEqual(result.exit_code, 2)
+        self.assertIn("Unknown webhook format", result.stdout)
+
+    @patch("inoue.send_webhook")
+    def test_deliver_webhooks_counts_only_successful_posts(self, mock_send):
+        mock_send.side_effect = [{"ok": True}, RuntimeError("boom")]
+
+        delivered = deliver_webhooks([self._result(), self._result()], "http://127.0.0.1:9/hook", quiet=True)
+
+        self.assertEqual(delivered, 1)
+        self.assertEqual(mock_send.call_count, 2)
+
+    def test_deliver_webhooks_is_a_noop_without_a_url(self):
+        self.assertEqual(deliver_webhooks([self._result()], None), 0)
+
+    def test_build_webhook_payload_defaults_to_generic(self):
+        payload = build_webhook_payload(self._result())
+
+        self.assertEqual(sorted(payload), ["cves", "technologies", "url"])
 
 
 if __name__ == "__main__":

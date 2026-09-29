@@ -38,6 +38,12 @@ from core.scanner import (
     watch_scan_loop,
 )
 from core.terminal import TerminalSettings, create_console, load_terminal_settings
+from core.webhooks import (
+    build_discord_payload,
+    build_generic_payload,
+    build_slack_payload,
+    send_webhook,
+)
 
 app = typer.Typer(help="Inoue — tech stack fingerprinting CLI", add_completion=False)
 terminal_settings = TerminalSettings()
@@ -734,6 +740,48 @@ def run_history_command(
             console.print(f"  [yellow]certificate expiring in {cert['days_remaining']}d[/yellow] ({cert['expires']})")
 
 
+WEBHOOK_FORMATS = ("generic", "slack", "discord")
+
+
+def build_webhook_payload(result: ScanResult, webhook_format: str = "generic") -> dict:
+    """Build the webhook body for one scan result in the requested sink format."""
+    technologies = [technology.name for technology in result.technologies]
+    cves = [item["id"] for technology in result.technologies for item in technology.cves]
+    if webhook_format == "slack":
+        return build_slack_payload(result.url, technologies, cves)
+    if webhook_format == "discord":
+        return build_discord_payload(result.url, technologies, cves)
+    return build_generic_payload(result.url, technologies, cves)
+
+
+def deliver_webhooks(
+    results: list[ScanResult],
+    webhook_url: Optional[str],
+    webhook_format: str = "generic",
+    quiet: bool = False,
+) -> int:
+    """POST every scan result to the webhook URL, returning the delivered count.
+
+    Delivery is best-effort by design: a webhook outage, DNS failure, or
+    rejecting endpoint must never turn a successful scan into a failed run,
+    so every failure is reported as a warning and swallowed.
+    """
+    if not webhook_url:
+        return 0
+
+    delivered = 0
+    for result in results:
+        try:
+            payload = build_webhook_payload(result, webhook_format)
+            send_webhook(webhook_url, payload)
+            delivered += 1
+        except Exception as exc:
+            console.print(f"  [yellow]webhook delivery failed[/yellow] for {result.url}: {exc}")
+    if delivered and not quiet:
+        console.print(f"  [green]webhook delivered[/green] {delivered} result(s)")
+    return delivered
+
+
 WATCH_DEFAULT_INTERVAL = 300
 
 
@@ -921,6 +969,8 @@ def main(
     harvest_urls: bool = typer.Option(False, "--harvest-urls", help="Collect historical + live URLs via gau, waybackurls, and katana (requires those tools on PATH)"),
     screenshot: bool = typer.Option(False, "--screenshot", help="Capture a screenshot via gowitness (requires gowitness + Chrome/Chromium)"),
     screenshot_dir: str = typer.Option("/tmp/inoue-screenshots", "--screenshot-dir", help="Directory to write gowitness screenshots to"),
+    webhook_url: Optional[str] = typer.Option(None, "--webhook-url", help="POST each scan result to this webhook URL (delivery failures never fail the scan)"),
+    webhook_format: str = typer.Option("generic", "--webhook-format", help="Webhook payload shape: generic, slack, or discord"),
 ):
     """
     Inoue — tech stack fingerprinting CLI
@@ -1149,6 +1199,15 @@ def main(
     else:
         modules = []
 
+    webhook_format = webhook_format.lower()
+    if webhook_url and webhook_format not in WEBHOOK_FORMATS:
+        emit_cli_error(
+            f"Unknown webhook format: {webhook_format}",
+            detail="Valid formats: " + ", ".join(WEBHOOK_FORMATS),
+            hint="Use --webhook-format generic for a plain JSON payload.",
+            exit_code=2,
+        )
+
     if service:
         modules.append("tech")
     if headers:
@@ -1322,6 +1381,9 @@ def main(
                 console.print(f"  [yellow]history save failed[/yellow] for {result.url}: {exc}")
         if saved_count and not json_out:
             console.print(f"  [green]saved[/green] {saved_count} snapshot(s) to {db_path}")
+
+    if webhook_url:
+        deliver_webhooks(results, webhook_url, webhook_format=webhook_format, quiet=json_out)
 
     if nuclei_out:
         try:
