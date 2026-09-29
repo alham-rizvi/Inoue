@@ -577,6 +577,21 @@ class ScannerSummaryTests(unittest.TestCase):
         self.assertIn("security headers", result.stdout)
         self.assertIn("Strict-Transport-Security", result.stdout)
 
+    def test_about_command_prints_metadata_instead_of_scanning_a_target(self):
+        result = CliRunner().invoke(app, ["about"], catch_exceptions=False)
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("Repository:", result.stdout)
+        self.assertNotIn("starting request", result.stdout)
+
+    def test_about_command_supports_json_output(self):
+        result = CliRunner().invoke(app, ["about", "--json"], catch_exceptions=False)
+
+        self.assertEqual(result.exit_code, 0)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["name"], "Inoue")
+        self.assertIn("version", payload)
+
     def test_result_to_dict_preserves_all_recon_fields(self):
         result = ScanResult(
             url="https://example.com",

@@ -608,16 +608,43 @@ def update():
         console.print(result["details"])
 
 
+ABOUT_REPOSITORY = "https://github.com/alhamrizvi-cloud/Inoue"
+ABOUT_PRESETS = ("fast", "full-recon", "all")
+ABOUT_EXAMPLES = (
+    "inoue -m fast https://target.example",
+    "inoue -m full-recon https://target.example",
+    "inoue --json -o report.json https://target.example",
+)
+
+
+def render_about(json_out: bool = False) -> None:
+    """Print project metadata as text, or as JSON when json_out is set.
+
+    Shared by the Typer `about` command and the variadic-target dispatch in
+    `main`, because the positional `targets` argument otherwise swallows the
+    command name before Typer can route it.
+    """
+    if json_out:
+        print(json.dumps({
+            "name": "Inoue",
+            "version": APP_VERSION,
+            "repository": ABOUT_REPOSITORY,
+            "presets": list(ABOUT_PRESETS),
+            "examples": list(ABOUT_EXAMPLES),
+        }, indent=2))
+        return
+    console.print(f"[bold]Inoue[/bold] [dim]v{APP_VERSION}[/dim]")
+    console.print(f"Repository: {ABOUT_REPOSITORY}")
+    console.print(f"Presets: {', '.join(ABOUT_PRESETS)}")
+    console.print("Examples:")
+    for example in ABOUT_EXAMPLES:
+        console.print(f"  - {example}")
+
+
 @app.command()
 def about():
     """Show project metadata and quick usage hints."""
-    console.print(f"[bold]Inoue[/bold] [dim]v{APP_VERSION}[/dim]")
-    console.print("Repository: https://github.com/alhamrizvi-cloud/Inoue")
-    console.print("Presets: fast, full-recon, all")
-    console.print("Examples:")
-    console.print("  - inoue -m fast https://target.example")
-    console.print("  - inoue -m full-recon https://target.example")
-    console.print("  - inoue --json -o report.json https://target.example")
+    render_about()
 
 
 @app.command("update-cve")
@@ -791,6 +818,24 @@ def main(
         cve_min_severity = config.get("cve_min_severity")
     if plugin_dir is None:
         plugin_dir = config.get("plugin_dir")
+
+    if targets and targets[0] == "about":
+        # The variadic `targets` argument consumes the first positional token,
+        # so Typer never dispatches the registered `about` command. Handle it
+        # here, mirroring the `history` / `update-cve` dispatch below.
+        command_args = targets[1:]
+        if "--help" in command_args or "-h" in command_args:
+            console.print("Usage: python inoue.py about [--json]")
+            raise typer.Exit()
+        about_json = json_out
+        for argument in command_args:
+            if argument == "--json":
+                about_json = True
+                continue
+            console.print(f"[red]unknown about option[/red] {argument}")
+            raise typer.Exit(2)
+        render_about(json_out=about_json)
+        raise typer.Exit()
 
     if targets and targets[0] == "history":
         command_args = targets[1:]
