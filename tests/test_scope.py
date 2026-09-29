@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
-from core.scope import Scope, filter_hosts, parse_scope_file
+from core.scope import Scope, filter_hosts, parse_scope_file, scope_file_problem
 
 
 class ScopeMatchingTests(unittest.TestCase):
@@ -108,6 +108,28 @@ class ScopeFileParsingTests(unittest.TestCase):
         self.assertEqual(scope.allow_domains, ["example.com"])
 
 
+class ScopeFileValidationTests(unittest.TestCase):
+    def test_valid_scope_file_reports_no_problem(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "scope.txt"
+            path.write_text("example.com\n", encoding="utf-8")
+            self.assertIsNone(scope_file_problem(str(path)))
+
+    def test_missing_scope_file_is_reported(self):
+        problem = scope_file_problem("/nonexistent/path/scope.txt")
+        self.assertIsNotNone(problem)
+        self.assertIn("not found", problem)
+
+    def test_directory_path_is_reported(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            problem = scope_file_problem(d)
+        self.assertIsNotNone(problem)
+        self.assertIn("not a regular file", problem)
+
+
 class FilterHostsTests(unittest.TestCase):
     def test_none_scope_passes_everything_through(self):
         self.assertEqual(filter_hosts(["a.com", "b.com"], None), ["a.com", "b.com"])
@@ -161,6 +183,16 @@ class ScanScopeEnforcementTests(unittest.TestCase):
 
         self.assertIsNone(result.error)
         mock_get.assert_called_once()
+
+    @patch("core.scanner._get_with_redirect_policy")
+    def test_missing_scope_file_refuses_to_scan(self, mock_get):
+        from core.scanner import scan
+
+        result = scan("https://example.com", modules=["fast"], scope_file="/nonexistent-scope.txt")
+
+        self.assertIsNotNone(result.error)
+        self.assertIn("refusing to scan", result.error)
+        mock_get.assert_not_called()
 
     @patch("core.scanner._get_with_redirect_policy")
     def test_no_scope_file_means_unrestricted(self, mock_get):
@@ -218,6 +250,20 @@ class TakeoverScopeFilteringTests(unittest.TestCase):
         )
         probed_hosts = mock_batch.call_args[0][0]
         self.assertIn("anything.example.com", probed_hosts)
+
+    @patch("core.takeover.check_takeover_batch")
+    def test_missing_scope_file_probes_nothing(self, mock_batch):
+        from core.scanner import _run_takeover_check
+
+        _run_takeover_check(
+            "example.com",
+            subdomains=[{"subdomain": "www.example.com"}],
+            dns_records={},
+            timeout=5,
+            scope_file="/nonexistent-scope.txt",
+        )
+
+        mock_batch.assert_not_called()
 
     @patch("core.takeover.check_takeover_batch")
     def test_target_itself_excluded_if_out_of_scope(self, mock_batch):

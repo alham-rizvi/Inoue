@@ -634,6 +634,15 @@ class ScannerSummaryTests(unittest.TestCase):
 
         self.assertEqual(result.exit_code, 0)
 
+    def test_cli_missing_scope_file_fails_closed_without_scanning(self):
+        result = CliRunner().invoke(
+            app, ["--scope", "/nonexistent-scope.txt", "--no-banner", "example.com"], catch_exceptions=False
+        )
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("scope", result.stdout.lower())
+        self.assertNotIn("services detected", result.stdout)
+
     def test_result_to_dict_preserves_all_recon_fields(self):
         result = ScanResult(
             url="https://example.com",

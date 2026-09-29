@@ -22,8 +22,10 @@ File format (plain text, one entry per line):
     !internal.example.com # out-of-scope override (deny wins over allow)
     !10.1.0.0/16
 
-An empty or missing scope file means "no restriction" - scope is strictly
-opt-in. This is deliberately a plain, dependency-free line format rather
+An empty scope file means "no restriction" - scope is strictly opt-in. A
+*missing* or unreadable scope file is treated as an error rather than as
+"no restriction", so `--scope` can never fail open. This is deliberately a
+plain, dependency-free line format rather
 than YAML/JSON, so a program's published scope list can be pasted in with
 minimal editing.
 """
@@ -88,7 +90,12 @@ class Scope:
 
 
 def parse_scope_file(path: str) -> Scope:
-    """Parse a scope file. Missing file or empty content means unrestricted."""
+    """Parse a scope file. An empty file means unrestricted.
+
+    A missing file also parses as unrestricted for backward compatibility;
+    callers that must fail closed (the CLI, the scanner entry points) check
+    :func:`scope_file_problem` first.
+    """
     scope = Scope()
     file_path = Path(path).expanduser()
     if not file_path.exists():
@@ -118,6 +125,25 @@ def parse_scope_file(path: str) -> Scope:
             (scope.deny_domains if deny else scope.allow_domains).append(line.lower())
 
     return scope
+
+
+def scope_file_problem(path: str) -> Optional[str]:
+    """Return a human-readable problem if `path` cannot be used as a scope file.
+
+    A missing, non-file, or unreadable `--scope` path must never be treated as
+    "no restriction": failing open would let a scan proceed against targets the
+    operator believed were gated. Returns None when the file is usable.
+    """
+    file_path = Path(path).expanduser()
+    if not file_path.exists():
+        return f"scope file not found: {path}"
+    if not file_path.is_file():
+        return f"scope path is not a regular file: {path}"
+    try:
+        file_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return f"scope file is not readable: {path} ({exc})"
+    return None
 
 
 def filter_hosts(hosts: list[str], scope: Optional[Scope]) -> list[str]:

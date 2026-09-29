@@ -917,6 +917,18 @@ def main(
             exit_code=2,
         )
 
+    if scope_file:
+        from core.scope import scope_file_problem
+
+        problem = scope_file_problem(scope_file)
+        if problem:
+            emit_cli_error(
+                "Refusing to scan: the --scope file could not be read.",
+                detail=problem,
+                hint="Provide a readable scope file, or omit --scope to scan without a scope restriction.",
+                exit_code=2,
+            )
+
     if not no_banner and not json_out:
         print_banner()
 

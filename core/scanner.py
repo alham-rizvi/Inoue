@@ -1243,7 +1243,10 @@ def _run_takeover_check(hostname: str, subdomains: list, dns_records: dict, time
             hosts.append(name)
 
     if scope_file:
-        from core.scope import filter_hosts, parse_scope_file
+        from core.scope import filter_hosts, parse_scope_file, scope_file_problem
+
+        if scope_file_problem(scope_file):
+            return []
         hosts = filter_hosts(hosts, parse_scope_file(scope_file))
         if not hosts:
             return []
@@ -1676,7 +1679,14 @@ async def _async_scan_target(
     started = time.perf_counter()
 
     if scope_file:
-        from core.scope import parse_scope_file
+        from core.scope import parse_scope_file, scope_file_problem
+
+        problem = scope_file_problem(scope_file)
+        if problem:
+            result.error = f"{problem} - refusing to scan without making any request."
+            if progress:
+                progress(result.error)
+            return result
         scope = parse_scope_file(scope_file)
         if not scope.allows(parsed.hostname or ""):
             result.error = f"'{parsed.hostname}' is not in scope per {scope_file} - refusing to scan without making any request."
@@ -2295,7 +2305,13 @@ def scan(
     plan = build_recon_plan(modules)
 
     if scope_file:
-        from core.scope import parse_scope_file
+        from core.scope import parse_scope_file, scope_file_problem
+
+        problem = scope_file_problem(scope_file)
+        if problem:
+            result.error = f"{problem} - refusing to scan without making any request."
+            report(result.error)
+            return result
         scope = parse_scope_file(scope_file)
         if not scope.allows(hostname):
             result.error = f"'{hostname}' is not in scope per {scope_file} - refusing to scan without making any request."
