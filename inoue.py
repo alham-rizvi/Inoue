@@ -931,7 +931,7 @@ def main(
             console.print("[yellow]TLS fingerprinting unavailable[/yellow]: optional TLS tooling is not installed; skipping best-effort metadata capture.")
             tls_fingerprint = False
 
-    if any([service, headers, dns, ssl, whois, subdomains, mail, ports, extra, fast, full_recon, all_modules, smart, active, passive, company, cve]) and modules is None:
+    if any([service, headers, dns, ssl, whois, subdomains, mail, ports, extra, fast, full_recon, all_modules, smart, active, passive, company, cve, fail_on_cve]) and modules is None:
         modules = []
     if modules is not None:
         modules = [m.lower() for m in modules]
@@ -970,7 +970,10 @@ def main(
         modules.append("passive")
     if company:
         modules.append("company")
-    if cve:
+    # --fail-on-cve is meaningless without CVE correlation, so requesting it
+    # must also turn correlation on; otherwise the flag silently does nothing.
+    cve_requested = bool(cve) or fail_on_cve
+    if cve_requested:
         modules.append("cve")
 
     if modules == []:
@@ -1142,7 +1145,7 @@ def main(
                 )
         if json_out:
             print(json_str)
-        exit_code = result_exit_code(results, bool(cve), fail_on_cve)
+        exit_code = result_exit_code(results, cve_requested, fail_on_cve)
         if exit_code:
             raise typer.Exit(exit_code)
         return
@@ -1156,7 +1159,7 @@ def main(
             continue
         render_result(result, verbose=verbose, evidence=evidence, modules=modules)
 
-    exit_code = result_exit_code(results, bool(cve), fail_on_cve)
+    exit_code = result_exit_code(results, cve_requested, fail_on_cve)
     if exit_code:
         raise typer.Exit(exit_code)
 

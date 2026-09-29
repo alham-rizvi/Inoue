@@ -604,6 +604,36 @@ class ScannerSummaryTests(unittest.TestCase):
         self.assertEqual(payload["name"], "Inoue")
         self.assertIn("version", payload)
 
+    @patch("inoue.scan")
+    def test_cli_fail_on_cve_exits_2_when_cves_are_found(self, mock_scan):
+        mock_scan.return_value = ScanResult(
+            url="https://example.com",
+            final_url="https://example.com",
+            status_code=200,
+            response_time_ms=1,
+            technologies=[Detection("Apache", "Web Server", cves=[{"id": "CVE-TEST", "severity": "high", "summary": "test"}])],
+        )
+
+        result = CliRunner().invoke(app, ["--fail-on-cve", "--no-banner", "example.com"], catch_exceptions=False)
+
+        self.assertEqual(result.exit_code, 2)
+        _, kwargs = mock_scan.call_args
+        self.assertIn("cve", kwargs["modules"])
+
+    @patch("inoue.scan")
+    def test_cli_without_fail_on_cve_exits_0_when_cves_are_found(self, mock_scan):
+        mock_scan.return_value = ScanResult(
+            url="https://example.com",
+            final_url="https://example.com",
+            status_code=200,
+            response_time_ms=1,
+            technologies=[Detection("Apache", "Web Server", cves=[{"id": "CVE-TEST", "severity": "high", "summary": "test"}])],
+        )
+
+        result = CliRunner().invoke(app, ["--no-banner", "example.com"], catch_exceptions=False)
+
+        self.assertEqual(result.exit_code, 0)
+
     def test_result_to_dict_preserves_all_recon_fields(self):
         result = ScanResult(
             url="https://example.com",
