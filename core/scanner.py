@@ -1912,7 +1912,7 @@ async def _async_scan_target(
         result.extra_intel["company"].update(company_intel)
         result.enriched.setdefault("company", company_intel)
     if hostname:
-        external = _enrich_with_external_services(hostname, [tech.name for tech in result.technologies], api_key)
+        external = _enrich_with_external_services(hostname, api_key)
         if external:
             result.enriched.update(external)
     from core.plugins import run_plugins
@@ -2058,7 +2058,7 @@ def build_recon_summary(result: ScanResult) -> list[dict]:
     return services
 
 
-def _enrich_with_external_services(hostname: str, technology_names: list[str], api_key: Optional[str] = None) -> dict:
+def _enrich_with_external_services(hostname: str, api_key: Optional[str] = None) -> dict:
     if not api_key:
         return {}
 
@@ -2166,11 +2166,6 @@ def run_fingerprints(
     def report(message: str):
         if progress:
             progress(message)
-
-    # Always defined: the sync path has several fetch branches (HTTPS, HTTP
-    # fallback, and error paths) and http_posture is computed after all of
-    # them, so this must never be unbound.
-    _response_history = None
 
     scripts = _extract_scripts(body)
     meta = _extract_meta(body)
@@ -2602,7 +2597,7 @@ def scan(
         result.enriched["external_tools"] = external_results
 
     if hostname:
-        external = _enrich_with_external_services(hostname, [tech.name for tech in result.technologies], api_key)
+        external = _enrich_with_external_services(hostname, api_key)
         if external:
             result.enriched.update(external)
 
