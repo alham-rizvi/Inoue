@@ -5,7 +5,7 @@
 """
 Inoue - tech stack fingerprinting CLI
 Author: Alham Rizvi
-Repository: https://github.com/alhamrizvi-cloud/Inoue
+Repository: https://github.com/alham-rizvi/Inoue
 """
 
 import json
@@ -634,7 +634,7 @@ def update():
         console.print(result["details"])
 
 
-ABOUT_REPOSITORY = "https://github.com/alhamrizvi-cloud/Inoue"
+ABOUT_REPOSITORY = "https://github.com/alham-rizvi/Inoue"
 ABOUT_PRESETS = ("fast", "full-recon", "all")
 ABOUT_COMMANDS = ("scan (default)", "watch", "history", "about", "update", "update-cve")
 ABOUT_EXAMPLES = (

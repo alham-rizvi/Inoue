@@ -15,7 +15,7 @@ Thanks for helping improve Inoue. This guide explains how to contribute fingerpr
 ### Clone and prepare environment
 
 ```bash
-git clone https://github.com/alhamrizvi-cloud/Inoue.git
+git clone https://github.com/alham-rizvi/Inoue.git
 cd Inoue
 python -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
