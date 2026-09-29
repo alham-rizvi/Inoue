@@ -421,33 +421,6 @@ def _get_ssl_info(hostname: str) -> dict:
         return {"error": str(e)}
 
 
-def _get_active_tls_inventory(hostname: str) -> dict:
-    try:
-        import nmap
-    except Exception:
-        return {"error": "python-nmap is not installed"}
-    try:
-        nm = nmap.PortScanner()
-        result = nm.scan(hostname, arguments='-sV -p 443,8443,80,8080 --open')
-        hosts = result.get('scan', {})
-        if not hosts:
-            return {"services": []}
-        services = []
-        for host, details in hosts.items():
-            for port, info in details.get('tcp', {}).items():
-                if info.get('state') == 'open':
-                    services.append({
-                        'port': port,
-                        'state': info.get('state'),
-                        'name': info.get('name', 'unknown'),
-                        'product': info.get('product', ''),
-                        'version': info.get('version', ''),
-                    })
-        return {"services": services}
-    except Exception as exc:
-        return {"error": str(exc)}
-
-
 def _get_dns(hostname: str) -> dict:
     records = {}
     try:
