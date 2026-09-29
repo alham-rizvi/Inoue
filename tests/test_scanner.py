@@ -516,6 +516,18 @@ class ScannerSummaryTests(unittest.TestCase):
         self.assertTrue(plan["ports"])
         self.assertTrue(plan["extra"])
 
+    def test_build_recon_plan_cve_keeps_technology_detection_enabled(self):
+        plan = build_recon_plan(["cve"])
+
+        self.assertTrue(plan["cve"])
+        self.assertTrue(plan["tech"], "requesting CVE correlation must not suppress technology fingerprinting")
+
+    def test_build_recon_plan_headers_only_does_not_enable_cve(self):
+        plan = build_recon_plan(["headers"])
+
+        self.assertFalse(plan["cve"])
+        self.assertFalse(plan["tech"])
+
     def test_build_recon_plan_supports_fast_preset(self):
         plan = build_recon_plan(["fast"])
 

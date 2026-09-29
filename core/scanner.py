@@ -627,6 +627,10 @@ def build_recon_plan(requested: Optional[list[str]] = None) -> dict:
         modules["extra"] = True
     if cve_correlation:
         modules["cve"] = True
+        # CVE correlation matches detected versions against the dataset, so
+        # requesting it must never suppress technology fingerprinting - doing
+        # so left nothing to correlate against.
+        modules["tech"] = True
 
     if fast_scan:
         modules.update({
