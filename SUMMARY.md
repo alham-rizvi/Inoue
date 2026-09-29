@@ -28,9 +28,7 @@
 
 ## Roadmap
 
-* [Next Roadmap](TODO-next-roadmap.md)
-* [Bug Bounty Roadmap](TODO-bugbounty-roadmap.md)
-* [General TODO](TODO.md)
+* [Roadmap](ROADMAP.md)
 * [Known Bugs (historical)](guides/Bugs-to-fix.md)
 
 ## Extras

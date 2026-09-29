@@ -70,10 +70,11 @@ Inoue/
 ├── GUIDE.md                   # extension and updater guide
 ├── pyproject.toml             # package metadata and scripts
 ├── requirements.txt           # dev and runtime dependencies
+├── requirements-api.txt       # optional API backend dependencies
 ├── SECURITY.md                # security policy
 ├── Dockerfile                 # container definition
 ├── docker-compose.yml         # container orchestration
-└── TODO.md                    # roadmap and backlog
+└── ROADMAP.md                 # roadmap and backlog
 ```
 
 ## Starting points for contributors
