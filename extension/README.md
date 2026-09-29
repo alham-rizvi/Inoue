@@ -5,11 +5,11 @@ This shared WebExtension works in Chrome and Firefox. It reads the active HTTP(S
 ## Run locally
 
 From the repository root, make sure the API dependencies are installed
-(they're included in `requirements.txt`; if you installed the `inoue`
-package directly instead, use `pip install "inoue[api]"`):
+(they live in `requirements-api.txt`; if you installed the `inoue` package
+directly instead, use `pip install "inoue[api]"`):
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements-api.txt
 python -m uvicorn api.main:app --host 127.0.0.1 --port 8000
 ```
 

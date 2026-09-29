@@ -1,0 +1,12 @@
+# Optional API backend dependencies for Inoue (api/main.py).
+#
+# Required to run `uvicorn api.main:app`, which the browser extension
+# (extension/README.md) and any external MCP-style client talk to. The plain
+# CLI does not need these, so they are kept out of requirements.txt.
+#
+# Install with:
+#     pip install -r requirements-api.txt
+# or as the packaged extra:
+#     pip install -e ".[api]"
+fastapi>=0.111
+uvicorn>=0.30
