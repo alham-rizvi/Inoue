@@ -45,7 +45,18 @@ from core.webhooks import (
     send_webhook,
 )
 
-app = typer.Typer(help="Inoue — tech stack fingerprinting CLI", add_completion=False)
+app = typer.Typer(
+    help=(
+        "Inoue — tech stack fingerprinting CLI. Continuous diff mode: "
+        "'inoue watch TARGET --interval 300'. Delivery: "
+        "'--webhook-url URL [--webhook-format generic|slack|discord]'."
+    ),
+    epilog=(
+        "Examples: inoue example.com | inoue watch example.com --iterations 2 | "
+        "inoue --webhook-url https://hooks.example/inoue --webhook-format slack example.com"
+    ),
+    add_completion=False,
+)
 terminal_settings = TerminalSettings()
 console = create_console(terminal_settings)
 
@@ -625,10 +636,13 @@ def update():
 
 ABOUT_REPOSITORY = "https://github.com/alhamrizvi-cloud/Inoue"
 ABOUT_PRESETS = ("fast", "full-recon", "all")
+ABOUT_COMMANDS = ("scan (default)", "watch", "history", "about", "update", "update-cve")
 ABOUT_EXAMPLES = (
     "inoue -m fast https://target.example",
     "inoue -m full-recon https://target.example",
     "inoue --json -o report.json https://target.example",
+    "inoue watch https://target.example --interval 300 --iterations 0",
+    "inoue --webhook-url https://hooks.example/inoue --webhook-format slack https://target.example",
 )
 
 
@@ -645,12 +659,14 @@ def render_about(json_out: bool = False) -> None:
             "version": APP_VERSION,
             "repository": ABOUT_REPOSITORY,
             "presets": list(ABOUT_PRESETS),
+            "commands": list(ABOUT_COMMANDS),
             "examples": list(ABOUT_EXAMPLES),
         }, indent=2))
         return
     console.print(f"[bold]Inoue[/bold] [dim]v{APP_VERSION}[/dim]")
     console.print(f"Repository: {ABOUT_REPOSITORY}")
     console.print(f"Presets: {', '.join(ABOUT_PRESETS)}")
+    console.print(f"Commands: {', '.join(ABOUT_COMMANDS)}")
     console.print("Examples:")
     for example in ABOUT_EXAMPLES:
         console.print(f"  - {example}")
@@ -982,6 +998,8 @@ def main(
       inoue -v -e https://target.htb\n
       inoue --json -o out.json site1.com site2.com\n
       inoue --no-dns -t 5 10.10.11.55\n      inoue -m fast https://target.example\n      inoue -m full-recon https://target.example\n
+      inoue watch https://target.example --interval 300 --iterations 0\n
+      inoue --webhook-url https://hooks.example/inoue --webhook-format slack https://target.example\n
     """
     if ctx.invoked_subcommand is not None:
         return

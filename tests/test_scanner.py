@@ -1043,6 +1043,30 @@ class WatchCommandTests(unittest.TestCase):
         self.assertEqual(result.exit_code, 2)
         self.assertIn("--bogus", result.stdout)
 
+    def test_main_help_advertises_watch_and_webhooks(self):
+        result = CliRunner().invoke(app, ["--help"], catch_exceptions=False)
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("watch", result.stdout)
+        self.assertIn("--webhook-url", result.stdout)
+        self.assertIn("--webhook-format", result.stdout)
+
+    def test_about_advertises_watch_command_and_webhook_examples(self):
+        result = CliRunner().invoke(app, ["about"], catch_exceptions=False)
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("Commands:", result.stdout)
+        self.assertIn("watch", result.stdout)
+        self.assertIn("--webhook-url", result.stdout)
+
+    def test_about_json_includes_command_list(self):
+        result = CliRunner().invoke(app, ["about", "--json"], catch_exceptions=False)
+
+        self.assertEqual(result.exit_code, 0)
+        payload = json.loads(result.stdout)
+        self.assertIn("watch", payload["commands"])
+        self.assertTrue(any("watch" in example for example in payload["examples"]))
+
     @patch("core.history.record_snapshot")
     @patch("inoue.scan")
     @patch("inoue.watch_scan_loop")
