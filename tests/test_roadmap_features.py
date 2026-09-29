@@ -102,6 +102,51 @@ class RoadmapFeatureTests(unittest.TestCase):
         self.assertEqual(results, ["ok", "ok"])
         self.assertEqual(sleep.call_count, 1)
 
+    def test_watch_scan_loop_runs_until_interrupted_when_iterations_is_zero(self):
+        calls = []
+
+        def fake_scan(target):
+            calls.append(target)
+            return f"cycle-{len(calls)}"
+
+        sleeps = []
+
+        class _Interrupted(Exception):
+            pass
+
+        def fake_sleep(seconds):
+            sleeps.append(seconds)
+            if len(sleeps) >= 2:
+                raise _Interrupted()
+
+        with self.assertRaises(_Interrupted):
+            watch_scan_loop(
+                ["https://example.com"],
+                fake_scan,
+                interval_seconds=1,
+                iterations=0,
+                sleep_fn=fake_sleep,
+            )
+
+        self.assertEqual(len(calls), 2)
+
+    def test_watch_scan_loop_invokes_on_result_hook_per_scan(self):
+        seen = []
+
+        def fake_scan(target):
+            return f"scan-{target}"
+
+        results = watch_scan_loop(
+            ["https://example.com", "https://example.org"],
+            fake_scan,
+            interval_seconds=0,
+            iterations=2,
+            on_result=seen.append,
+        )
+
+        self.assertEqual(seen, results)
+        self.assertEqual(len(seen), 4)
+
     def test_import_compatibility_detects_live_catalog_duplicates(self):
         current = {"Apache": {"category": "Web Server"}, "Nginx": {"category": "Web Server"}}
         incoming = {"Apache": {"category": "Web Server"}, "Cloudflare": {"category": "CDN"}}

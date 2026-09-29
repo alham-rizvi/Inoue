@@ -30,10 +30,12 @@ from core.config import load_config
 from core.scanner import (
     VALID_RECON_MODULES,
     build_service_summary,
+    diff_scan_results,
     scan,
     scan_many,
     ScanResult,
     unknown_recon_modules,
+    watch_scan_loop,
 )
 from core.terminal import TerminalSettings, create_console, load_terminal_settings
 
@@ -732,6 +734,133 @@ def run_history_command(
             console.print(f"  [yellow]certificate expiring in {cert['days_remaining']}d[/yellow] ({cert['expires']})")
 
 
+WATCH_DEFAULT_INTERVAL = 300
+
+
+def format_watch_diff(diff: dict) -> list[str]:
+    """Render a `diff_scan_results` payload as short human-readable lines."""
+    lines: list[str] = []
+    for change in diff.get("technology_changes", []):
+        if change["status"] == "added":
+            lines.append(f"+ {change['name']} {change.get('version') or ''}".rstrip())
+        elif change["status"] == "removed":
+            lines.append(f"- {change['name']} {change.get('version') or ''}".rstrip())
+        else:
+            lines.append(f"~ {change['name']} {change.get('previous')} -> {change.get('current')}")
+    for change in diff.get("cve_changes", []):
+        lines.append(f"CVE {change['status']}: {change['id']}")
+    ports = diff.get("port_changes") or {}
+    if ports.get("added"):
+        lines.append(f"ports opened: {ports['added']}")
+    if ports.get("removed"):
+        lines.append(f"ports closed: {ports['removed']}")
+    for certificate in diff.get("certificate_expiry", []):
+        lines.append(f"certificate expiring in {certificate['days_remaining']}d ({certificate['expires']})")
+    return lines
+
+
+def run_watch_command(
+    target: str,
+    interval: int = WATCH_DEFAULT_INTERVAL,
+    iterations: int = 0,
+    history_path: Optional[str] = None,
+    json_out: bool = False,
+) -> None:
+    """Re-scan one target on an interval and report what changed between scans.
+
+    Wraps the library helpers that were previously unreachable from the CLI:
+    `core.scanner.watch_scan_loop` drives the cadence (0 iterations means "run
+    until interrupted") and `core.scanner.diff_scan_results` produces the
+    per-cycle change report.
+    """
+    if interval < 0:
+        emit_cli_error(
+            "--interval must be zero or greater.",
+            hint="For example, --interval 300 re-scans every five minutes.",
+            exit_code=2,
+        )
+    if iterations < 0:
+        emit_cli_error(
+            "--iterations must be zero (run until interrupted) or greater.",
+            hint="Use --iterations 1 for a single verification cycle.",
+            exit_code=2,
+        )
+
+    normalized = target if target.startswith(("http://", "https://")) else f"https://{target}"
+    cycles = None if iterations == 0 else iterations
+
+    def scan_once(scan_target: str) -> ScanResult:
+        result = scan(scan_target, modules=["fast"])
+        if history_path and not result.error:
+            try:
+                from core.history import record_snapshot
+                from core.scanner import _serialize_scan_result
+
+                record_snapshot(history_path, result.url, _serialize_scan_result(result))
+            except Exception as exc:
+                console.print(f"  [yellow]history save failed[/yellow] for {result.url}: {exc}")
+        return result
+
+    if not json_out:
+        window = "until interrupted" if cycles is None else f"{cycles} cycle(s)"
+        console.print(f"[bold]{normalized}[/bold] watching every {interval}s ({window})")
+
+    state: dict = {"previous": None, "cycle": 0}
+
+    def handle_result(result: ScanResult) -> None:
+        state["cycle"] += 1
+        previous = state["previous"]
+        diff = diff_scan_results(previous, result) if previous is not None else None
+        state["previous"] = result
+
+        if json_out:
+            print(json.dumps({"cycle": state["cycle"], "url": result.url, "error": result.error, "diff": diff}))
+            return
+        if result.error:
+            console.print(f"  [red]cycle {state['cycle']} error[/red] {result.error}")
+            return
+        if diff is None:
+            console.print(f"  [dim]cycle {state['cycle']}[/dim] baseline captured")
+            return
+        changes = format_watch_diff(diff)
+        if not changes:
+            console.print(f"  [dim]cycle {state['cycle']}[/dim] no changes")
+            return
+        console.print(f"  [bold]cycle {state['cycle']}[/bold] {len(changes)} change(s)")
+        for line in changes:
+            console.print(f"    {line}")
+
+    try:
+        watch_scan_loop(
+            [normalized],
+            scan_once,
+            interval_seconds=interval,
+            iterations=cycles,
+            on_result=handle_result,
+        )
+    except KeyboardInterrupt:
+        if not json_out:
+            console.print("[yellow]watch stopped[/yellow]")
+
+
+@app.command()
+def watch(
+    target: str = typer.Argument(..., help="Target URL or IP to re-scan on an interval"),
+    interval: int = typer.Option(WATCH_DEFAULT_INTERVAL, "--interval", help="Seconds to wait between scan cycles"),
+    iterations: int = typer.Option(0, "--iterations", help="Number of cycles to run (0 runs until interrupted)"),
+    history_path: Optional[str] = typer.Option(None, "--history-path", help="Append each cycle to this SQLite history DB"),
+    json_out: bool = typer.Option(False, "--json", help="Emit one JSON object per cycle (JSON Lines)"),
+):
+    """Repeatedly scan a target and report technology, CVE, port, and certificate diffs."""
+    run_watch_command(
+        target,
+        interval=interval,
+        iterations=iterations,
+        history_path=history_path,
+        json_out=json_out,
+    )
+
+
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
@@ -905,6 +1034,61 @@ def main(
             console.print(f"[red]unknown update-cve option[/red] {argument}")
             raise typer.Exit(2)
         update_cve(source_url=source_url, output=output_path)
+        raise typer.Exit()
+
+    if targets and targets[0] == "watch":
+        command_args = targets[1:]
+        if "--help" in command_args or "-h" in command_args:
+            console.print("Usage: python inoue.py watch TARGET [--interval SECONDS] [--iterations N] [--history-path FILE] [--json]")
+            raise typer.Exit()
+        watch_target = None
+        watch_interval = WATCH_DEFAULT_INTERVAL
+        watch_iterations = 0
+        watch_history_path = None
+        watch_json = json_out
+        index = 0
+        while index < len(command_args):
+            argument = command_args[index]
+            if argument == "--interval" and index + 1 < len(command_args):
+                try:
+                    watch_interval = int(command_args[index + 1])
+                except ValueError:
+                    console.print(f"[red]invalid --interval value[/red] {command_args[index + 1]}")
+                    raise typer.Exit(2)
+                index += 2
+                continue
+            if argument == "--iterations" and index + 1 < len(command_args):
+                try:
+                    watch_iterations = int(command_args[index + 1])
+                except ValueError:
+                    console.print(f"[red]invalid --iterations value[/red] {command_args[index + 1]}")
+                    raise typer.Exit(2)
+                index += 2
+                continue
+            if argument == "--history-path" and index + 1 < len(command_args):
+                watch_history_path = command_args[index + 1]
+                index += 2
+                continue
+            if argument == "--json":
+                watch_json = True
+                index += 1
+                continue
+            if not argument.startswith("-") and watch_target is None:
+                watch_target = argument
+                index += 1
+                continue
+            console.print(f"[red]unknown watch option[/red] {argument}")
+            raise typer.Exit(2)
+        if not watch_target:
+            console.print("[red]missing target[/red]. Usage: python inoue.py watch TARGET")
+            raise typer.Exit(2)
+        run_watch_command(
+            watch_target,
+            interval=watch_interval,
+            iterations=watch_iterations,
+            history_path=watch_history_path,
+            json_out=watch_json,
+        )
         raise typer.Exit()
 
     try:

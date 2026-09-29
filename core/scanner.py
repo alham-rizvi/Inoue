@@ -1646,23 +1646,42 @@ def watch_scan_loop(
     interval_seconds: float = 60,
     iterations: Optional[int] = None,
     sleep_fn: Optional[Callable[[float], None]] = None,
+    on_result: Optional[Callable[[object], None]] = None,
 ) -> list[object]:
-    """Run a scan callback repeatedly for a target list with a delay between cycles."""
+    """Run a scan callback repeatedly for a target list with a delay between cycles.
+
+    ``iterations=None`` runs exactly one cycle (the historical default) and a
+    positive value runs that many cycles. A non-positive value runs until the
+    caller is interrupted, which is what ``inoue watch`` uses for its default
+    "forever" mode. ``on_result`` is invoked after every scan so streaming
+    callers such as watch mode can react to a cycle immediately instead of
+    waiting for the whole loop to return.
+    """
     if not targets:
         return []
 
     sleep = sleep_fn or time.sleep
-    cycle_count = max(1, iterations) if iterations is not None else 1
-    results: list[object] = []
+    if iterations is None:
+        cycle_count: Optional[int] = 1
+    elif iterations <= 0:
+        cycle_count = None
+    else:
+        cycle_count = iterations
 
-    for cycle_index in range(cycle_count):
+    results: list[object] = []
+    cycle_index = 0
+
+    while cycle_count is None or cycle_index < cycle_count:
         for target in targets:
             try:
                 result = scan_fn(target)
             except TypeError:
                 result = scan_fn()
             results.append(result)
-        if cycle_index < cycle_count - 1 and interval_seconds > 0:
+            if on_result is not None:
+                on_result(result)
+        cycle_index += 1
+        if (cycle_count is None or cycle_index < cycle_count) and interval_seconds > 0:
             sleep(interval_seconds)
 
     return results

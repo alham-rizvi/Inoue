@@ -961,5 +961,111 @@ class ScannerSummaryTests(unittest.TestCase):
         self.assertIn("core/scanner.py", report)
 
 
+class WatchCommandTests(unittest.TestCase):
+    """The watch subcommand must be reachable and diff consecutive scans."""
+
+    @staticmethod
+    def _scan(technologies=None) -> ScanResult:
+        return ScanResult(
+            url="https://example.com",
+            final_url="https://example.com",
+            status_code=200,
+            response_time_ms=1,
+            technologies=technologies or [],
+        )
+
+    def _invoke_watch(self, results, extra_args=None):
+        """Run the watch command with watch_scan_loop stubbed out (no sleeping, no network)."""
+        captured = {}
+
+        def fake_loop(*args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+            for result in results:
+                kwargs["on_result"](result)
+            return list(results)
+
+        with patch("inoue.watch_scan_loop", side_effect=fake_loop):
+            cli_result = CliRunner().invoke(
+                app,
+                ["watch", "example.com", "--iterations", "2", "--interval", "1"] + list(extra_args or []),
+                catch_exceptions=False,
+            )
+        return cli_result, captured
+
+    def test_watch_prints_diff_between_consecutive_scans(self):
+        baseline = self._scan()
+        changed = self._scan([Detection("Apache", "Web Server")])
+
+        result, captured = self._invoke_watch([baseline, changed])
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("baseline captured", result.stdout)
+        self.assertIn("Apache", result.stdout)
+        self.assertEqual(captured["kwargs"]["iterations"], 2)
+        self.assertEqual(captured["kwargs"]["interval_seconds"], 1)
+
+    def test_watch_reports_no_changes_for_identical_scans(self):
+        result, _ = self._invoke_watch([self._scan(), self._scan()])
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("no changes", result.stdout)
+
+    def test_watch_json_emits_one_object_per_cycle(self):
+        result, _ = self._invoke_watch([self._scan(), self._scan([Detection("Nginx", "Web Server")])], ["--json"])
+
+        self.assertEqual(result.exit_code, 0)
+        payloads = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+        self.assertEqual([item["cycle"] for item in payloads], [1, 2])
+        self.assertIsNone(payloads[0]["diff"])
+        self.assertEqual(payloads[1]["diff"]["technology_changes"][0]["name"], "Nginx")
+
+    def test_watch_help_is_reachable(self):
+        result = CliRunner().invoke(app, ["watch", "--help"], catch_exceptions=False)
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("watch TARGET", result.stdout)
+
+    def test_watch_rejects_negative_interval(self):
+        result = CliRunner().invoke(app, ["watch", "example.com", "--interval", "-5"], catch_exceptions=False)
+
+        self.assertEqual(result.exit_code, 2)
+        self.assertIn("--interval", result.stdout)
+
+    def test_watch_rejects_missing_target(self):
+        result = CliRunner().invoke(app, ["watch"], catch_exceptions=False)
+
+        self.assertEqual(result.exit_code, 2)
+
+    def test_watch_rejects_unknown_option(self):
+        result = CliRunner().invoke(app, ["watch", "example.com", "--bogus"], catch_exceptions=False)
+
+        self.assertEqual(result.exit_code, 2)
+        self.assertIn("--bogus", result.stdout)
+
+    @patch("core.history.record_snapshot")
+    @patch("inoue.scan")
+    @patch("inoue.watch_scan_loop")
+    def test_watch_appends_history_snapshot_when_path_given(self, mock_loop, mock_scan, mock_record):
+        mock_scan.return_value = self._scan([Detection("Apache", "Web Server")])
+
+        def fake_loop(*args, **kwargs):
+            result = args[1](args[0][0])
+            kwargs["on_result"](result)
+            return [result]
+
+        mock_loop.side_effect = fake_loop
+
+        result = CliRunner().invoke(
+            app,
+            ["watch", "example.com", "--iterations", "1", "--history-path", "/tmp/inoue-watch-test.db"],
+            catch_exceptions=False,
+        )
+
+        self.assertEqual(result.exit_code, 0)
+        mock_record.assert_called_once()
+        self.assertEqual(mock_record.call_args[0][0], "/tmp/inoue-watch-test.db")
+
+
 if __name__ == "__main__":
     unittest.main()
