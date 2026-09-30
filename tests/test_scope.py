@@ -280,5 +280,121 @@ class TakeoverScopeFilteringTests(unittest.TestCase):
         mock_batch.assert_not_called()
 
 
+class ScopeIpLiteralEnforcementTests(unittest.TestCase):
+    """A scope file that lists an address (or a CIDR) must authorise an
+    IP-literal target.
+
+    ``Scope.allows()`` consults its IP/CIDR entries only through its ``ip``
+    argument, so the enforcement gate has to offer the target's address. It did
+    not, which meant ``--scope <file containing 127.0.0.1>`` refused
+    ``http://127.0.0.1/`` while the very same server reached as
+    ``http://localhost/`` was allowed.
+    """
+
+    @staticmethod
+    def _ok_response(url: str):
+        fake = MagicMock()
+        fake.url = url
+        fake.status_code = 200
+        fake.headers = {}
+        fake.cookies.items.return_value = []
+        fake.text = "<html></html>"
+        return fake
+
+    def _write_scope(self, directory: str, content: str) -> str:
+        from pathlib import Path
+
+        path = Path(directory) / "scope.txt"
+        path.write_text(content, encoding="utf-8")
+        return str(path)
+
+    @patch("core.scanner._get_with_redirect_policy")
+    def test_ip_literal_target_allowed_by_ip_entry(self, mock_get):
+        import tempfile
+        from core.scanner import scan
+
+        mock_get.return_value = self._ok_response("http://127.0.0.1:8080/")
+        with tempfile.TemporaryDirectory() as d:
+            scope = self._write_scope(d, "127.0.0.1\n")
+            result = scan("http://127.0.0.1:8080/", modules=["fast"], scope_file=scope)
+
+        self.assertIsNone(result.error)
+        mock_get.assert_called_once()
+
+    @patch("core.scanner._get_with_redirect_policy")
+    def test_ip_literal_target_allowed_by_cidr_entry(self, mock_get):
+        import tempfile
+        from core.scanner import scan
+
+        mock_get.return_value = self._ok_response("http://127.0.0.1:8080/")
+        with tempfile.TemporaryDirectory() as d:
+            scope = self._write_scope(d, "127.0.0.0/8\n")
+            result = scan("http://127.0.0.1:8080/", modules=["fast"], scope_file=scope)
+
+        self.assertIsNone(result.error)
+        mock_get.assert_called_once()
+
+    @patch("core.scanner._get_with_redirect_policy")
+    def test_ip_literal_target_still_refused_when_out_of_scope(self, mock_get):
+        import tempfile
+        from core.scanner import scan
+
+        with tempfile.TemporaryDirectory() as d:
+            scope = self._write_scope(d, "10.99.0.0/16\n")
+            result = scan("http://127.0.0.1:8080/", modules=["fast"], scope_file=scope)
+
+        self.assertIsNotNone(result.error)
+        self.assertIn("not in scope", result.error)
+        mock_get.assert_not_called()
+
+    @patch("core.scanner._get_with_redirect_policy")
+    def test_ip_literal_target_refused_when_denied_by_deny_entry(self, mock_get):
+        import tempfile
+        from core.scanner import scan
+
+        with tempfile.TemporaryDirectory() as d:
+            scope = self._write_scope(d, "127.0.0.0/8\n!127.0.0.1\n")
+            result = scan("http://127.0.0.1:8080/", modules=["fast"], scope_file=scope)
+
+        self.assertIsNotNone(result.error)
+        self.assertIn("not in scope", result.error)
+        mock_get.assert_not_called()
+
+    @patch("core.takeover.check_takeover_batch")
+    def test_takeover_filtering_accepts_ip_literal_target(self, mock_batch):
+        """The takeover fanout applies the same decision, so an IP-literal
+        target must not be silently dropped there either."""
+        import tempfile
+        from core.scanner import _run_takeover_check
+
+        mock_batch.return_value = []
+        with tempfile.TemporaryDirectory() as d:
+            scope = self._write_scope(d, "127.0.0.1\n")
+            _run_takeover_check(
+                "127.0.0.1", subdomains=[], dns_records={}, timeout=5, scope_file=scope
+            )
+
+        self.assertEqual(mock_batch.call_args[0][0], ["127.0.0.1"])
+
+    @patch("core.takeover.check_takeover_batch")
+    def test_takeover_filtering_still_drops_out_of_scope_hosts(self, mock_batch):
+        import tempfile
+        from core.scanner import _run_takeover_check
+
+        mock_batch.return_value = []
+        with tempfile.TemporaryDirectory() as d:
+            scope = self._write_scope(d, "127.0.0.1\n")
+            _run_takeover_check(
+                "127.0.0.1",
+                subdomains=[{"subdomain": "totally-unrelated.other.com"}],
+                dns_records={},
+                timeout=5,
+                scope_file=scope,
+            )
+
+        probed_hosts = mock_batch.call_args[0][0]
+        self.assertEqual(probed_hosts, ["127.0.0.1"])
+
+
 if __name__ == "__main__":
     unittest.main()
