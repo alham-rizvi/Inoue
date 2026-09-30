@@ -117,6 +117,21 @@ def emit_cli_error(message: str, *, detail: Optional[str] = None, hint: Optional
     raise typer.Exit(exit_code)
 
 
+def _tri_state(value) -> str:
+    """Render a tri-state DNS presence flag as text.
+
+    The recon modules distinguish "checked and absent" (False) from "the
+    lookup did not complete" (None), and collapsing those two into a single
+    "no" would turn a timeout into a confidently wrong security claim. So the
+    three states are kept distinct all the way to the terminal.
+    """
+    if value is True:
+        return "present"
+    if value is False:
+        return "absent"
+    return "unknown"
+
+
 def render_result(result: ScanResult, verbose: bool = False, evidence: bool = False, modules: Optional[list[str]] = None):
     selected_modules = {item.lower() for item in (modules or [])}
     show_module = lambda name: verbose or name in selected_modules or "all" in selected_modules or "full-recon" in selected_modules
@@ -339,6 +354,226 @@ def render_result(result: ScanResult, verbose: bool = False, evidence: bool = Fa
                 console.print(f"  [cyan]{rtype:<8}[/cyan] {v}")
         console.print()
 
+    # ---- deeper recon modules -------------------------------------------
+    # Each section only appears when the corresponding module was requested
+    # (or --verbose is on), so a plain scan is unchanged.
+    dns_deep = result.enriched.get("dns_deep") or {}
+    if dns_deep and show_module("dnsdeep"):
+        console.print("  [dim]── dns deep ──────────────────────────[/dim]")
+        caa_present = dns_deep.get("caa_present")
+        caa_color = "green" if caa_present else "yellow" if caa_present is False else "dim"
+        caa_tags = ", ".join(str(rec.get("tag", "")) for rec in dns_deep.get("caa", []))
+        console.print(f"  [cyan]CAA[/cyan] [{caa_color}]{_tri_state(caa_present)}[/{caa_color}]" + (f" [dim]({caa_tags})[/dim]" if caa_tags else ""))
+        signed = dns_deep.get("dnssec_signed")
+        signed_color = "green" if signed else "yellow" if signed is False else "dim"
+        signed_label = "signed" if signed else ("not signed" if signed is False else "unknown (lookup did not complete)")
+        console.print(f"  [cyan]DNSSEC[/cyan] [{signed_color}]{signed_label}[/{signed_color}] [dim]DNSKEY {dns_deep.get('dnskey_count', 0)}, DS {len(dns_deep.get('ds', []) or [])}[/dim]")
+        srv = dns_deep.get("srv") or {}
+        console.print(f"  [cyan]SRV[/cyan] {len(srv)} service record(s)")
+        for ns_entry in (dns_deep.get("ns") or [])[:6]:
+            ns_ips = ns_entry.get("ips") or []
+            ns_ips_label = ", ".join(ns_ips[:4]) if ns_ips else "no A/AAAA"
+            console.print(f"  [cyan]NS[/cyan]  {ns_entry.get('host', '?')} [dim]→ {ns_ips_label}[/dim]")
+        axfr = dns_deep.get("axfr") or {}
+        if axfr.get("allowed"):
+            console.print(f"  [bold red]AXFR ALLOWED[/bold red] [dim]zone transfer succeeded ({axfr.get('records', 0)} records) - full DNS zone disclosure[/dim]")
+        elif axfr.get("attempted"):
+            console.print(f"  [cyan]AXFR[/cyan] [dim]refused on {len(axfr.get('nameservers_tried', []) or [])} nameserver(s) (expected)[/dim]")
+        wildcard = dns_deep.get("wildcard") or {}
+        console.print(f"  [cyan]wildcard[/cyan] {'[yellow]detected[/yellow]' if wildcard.get('detected') else '[dim]not detected[/dim]'}")
+        if evidence:
+            for issue in (dns_deep.get("issues") or [])[:4]:
+                console.print(f"    [dim]• {issue}[/dim]")
+        console.print()
+
+    email_auth = result.enriched.get("email_auth") or {}
+    if email_auth and show_module("emailauth"):
+        console.print("  [dim]── email authentication ───────────────[/dim]")
+        bimi = email_auth.get("bimi") or {}
+        tls_rpt = email_auth.get("tls_rpt") or {}
+        mta_sts = email_auth.get("mta_sts") or {}
+        dkim = email_auth.get("dkim") or {}
+        console.print(f"  [cyan]BIMI[/cyan] {_tri_state(bimi.get('present'))}  [cyan]TLS-RPT[/cyan] {_tri_state(tls_rpt.get('present'))}")
+        console.print(
+            f"  [cyan]MTA-STS[/cyan] dns={_tri_state(mta_sts.get('dns_present'))} "
+            f"policy={_tri_state(mta_sts.get('policy_present'))} mode={mta_sts.get('mode') or 'n/a'}"
+        )
+        selectors_found = dkim.get("selectors_found") or []
+        selectors_label = ", ".join(str(name) for name in selectors_found[:6])
+        console.print(
+            f"  [cyan]DKIM[/cyan] {len(selectors_found)} selector(s) found "
+            f"[dim]of {len(dkim.get('selectors_checked') or [])} checked[/dim]"
+            + (f" [dim]{selectors_label}[/dim]" if selectors_label else "")
+        )
+        auth_score = email_auth.get("score")
+        score_color = "green" if (auth_score or 0) >= 80 else "yellow" if (auth_score or 0) >= 50 else "red"
+        console.print(f"  [cyan]score[/cyan] [{score_color}]{auth_score}/100[/{score_color}]")
+        if evidence:
+            for issue in (email_auth.get("issues") or [])[:4]:
+                console.print(f"    [dim]• {issue}[/dim]")
+        console.print()
+
+    asn_intel = result.enriched.get("asn_intel") or {}
+    if asn_intel and show_module("asn"):
+        console.print("  [dim]── asn / network ─────────────────────[/dim]")
+        if asn_intel.get("lookup_failed"):
+            console.print(f"  [yellow]lookup failed[/yellow] [dim]{asn_intel.get('ip')} - network ownership unknown[/dim]")
+        elif asn_intel.get("is_private"):
+            console.print(f"  [cyan]ASN[/cyan] [dim]n/a - {asn_intel.get('ip')} is not globally routable[/dim]")
+        else:
+            console.print(f"  [cyan]ASN[/cyan]    {asn_intel.get('asn')} [dim]{asn_intel.get('as_name') or ''}[/dim]")
+            console.print(
+                f"  [cyan]prefix[/cyan] {asn_intel.get('prefix')}  [cyan]country[/cyan] {asn_intel.get('country')}  "
+                f"[dim]registry {asn_intel.get('registry')}, allocated {asn_intel.get('allocated')}[/dim]"
+            )
+        if evidence:
+            for note in (asn_intel.get("notes") or [])[:4]:
+                console.print(f"    [dim]• {note}[/dim]")
+        console.print()
+
+    reputation = result.enriched.get("reputation") or {}
+    if reputation and show_module("reputation"):
+        console.print("  [dim]── reputation ────────────────────────[/dim]")
+        shodan = reputation.get("shodan_internetdb") or {}
+        if shodan.get("available"):
+            shodan_ports = shodan.get("ports") or []
+            console.print(f"  [cyan]Shodan ports[/cyan] {', '.join(str(p) for p in shodan_ports[:12]) if shodan_ports else 'none reported'}")
+            shodan_hostnames = shodan.get("hostnames") or []
+            if shodan_hostnames:
+                console.print(f"  [cyan]Shodan hostnames[/cyan] {', '.join(str(h) for h in shodan_hostnames[:6])}")
+            shodan_vulns = shodan.get("vulns") or []
+            if shodan_vulns:
+                console.print(f"  [red]Shodan vulns[/red] {', '.join(str(v) for v in shodan_vulns[:8])}")
+        else:
+            console.print(f"  [dim]Shodan: {shodan.get('error') or 'no information for this IP'}[/dim]")
+        dnsbl = reputation.get("dnsbl") or {}
+        listed = dnsbl.get("listed") or []
+        if listed:
+            for item in listed[:6]:
+                console.print(f"  [red]listed[/red] {item.get('zone')} [dim]{item.get('reason') or ''}[/dim]")
+        else:
+            console.print(f"  [green]DNSBL[/green] not listed [dim]({len(dnsbl.get('checked') or [])} zone(s) checked)[/dim]")
+        if dnsbl.get("note"):
+            console.print(f"  [dim]{dnsbl['note']}[/dim]")
+        if evidence:
+            for issue in (reputation.get("issues") or [])[:4]:
+                console.print(f"    [dim]• {issue}[/dim]")
+        console.print()
+
+    cloud_buckets = result.enriched.get("cloud_buckets") or {}
+    if cloud_buckets and show_module("cloud"):
+        console.print("  [dim]── cloud buckets ─────────────────────[/dim]")
+        buckets = cloud_buckets.get("found") or []
+        if not buckets:
+            console.print(f"  [dim]no matching buckets ({cloud_buckets.get('checked', 0)} probe(s) made)[/dim]")
+        for bucket in buckets[:12]:
+            if bucket.get("listable"):
+                console.print(f"  [bold red]LISTABLE[/bold red] {bucket.get('provider')} {bucket.get('name')} [dim]{bucket.get('url')}[/dim]")
+            else:
+                console.print(f"  [yellow]exists[/yellow] {bucket.get('provider')} {bucket.get('name')} [dim]HTTP {bucket.get('status')} - not publicly listable[/dim]")
+        unverified = cloud_buckets.get("unverified") or []
+        if unverified:
+            console.print(
+                f"  [dim]{len(unverified)} probe(s) reached no verdict (timeout, connect error or "
+                f"unexpected status) - not evidence of absence[/dim]"
+            )
+        console.print()
+
+    exposure = result.enriched.get("exposure") or {}
+    if exposure and show_module("exposure"):
+        console.print("  [dim]── exposure ──────────────────────────[/dim]")
+        exposure_findings = exposure.get("findings") or []
+        severity_counts = defaultdict(int)
+        for finding in exposure_findings:
+            severity_counts[str(finding.get("severity", "info"))] += 1
+        severity_summary = ", ".join(f"{sev} {count}" for sev, count in severity_counts.items()) or "none"
+        console.print(f"  [cyan]verified findings[/cyan] {len(exposure_findings)} [dim]({severity_summary})[/dim]")
+        for finding in exposure_findings[:10]:
+            finding_color = {"critical": "red", "high": "red", "medium": "yellow"}.get(finding.get("severity"), "dim")
+            console.print(f"  [{finding_color}]{finding.get('severity')}[/{finding_color}] {finding.get('path')} [dim]{finding.get('detail')}[/dim]")
+        listing_label = "[yellow]exposed[/yellow]" if exposure.get("directory_listing") else "[dim]none[/dim]"
+        console.print(f"  [cyan]directory listing[/cyan] {listing_label}  [cyan]source maps[/cyan] {len(exposure.get('source_maps') or [])}")
+        if evidence:
+            for candidate in (exposure.get("candidates") or [])[:6]:
+                console.print(f"    [dim]unverified {candidate.get('path')}: {candidate.get('note')}[/dim]")
+        console.print()
+
+    http_protocol = result.enriched.get("http_protocol") or {}
+    if http_protocol and show_module("protocol"):
+        console.print("  [dim]── http protocol ─────────────────────[/dim]")
+        console.print(
+            f"  [cyan]version[/cyan] {http_protocol.get('http_version') or 'unknown'}  "
+            f"[cyan]HTTP/2[/cyan] {_tri_state(http_protocol.get('http2'))}  "
+            f"[cyan]HTTP/3[/cyan] {_tri_state(http_protocol.get('http3'))}"
+        )
+        if http_protocol.get("tls_protocol"):
+            console.print(f"  [cyan]tls[/cyan] {http_protocol['tls_protocol']}")
+        if http_protocol.get("compression"):
+            console.print(f"  [cyan]compression[/cyan] {', '.join(str(item) for item in http_protocol['compression'])}")
+        if http_protocol.get("alt_svc"):
+            console.print(f"  [dim]alt-svc {http_protocol['alt_svc']}[/dim]")
+        if evidence:
+            for issue in (http_protocol.get("issues") or [])[:4]:
+                console.print(f"    [dim]• {issue}[/dim]")
+        console.print()
+
+    vhost = result.enriched.get("vhost") or {}
+    if vhost and show_module("vhost"):
+        console.print("  [dim]── virtual hosts ─────────────────────[/dim]")
+        vhosts_found = vhost.get("found") or []
+        if not vhosts_found:
+            console.print(f"  [dim]none of {vhost.get('candidates_checked', 0)} Host candidate(s) differed from the baseline[/dim]")
+        for entry in vhosts_found[:12]:
+            console.print(
+                f"  [cyan]{entry.get('host')}[/cyan] HTTP {entry.get('status')} "
+                f"[dim]{entry.get('length')}B {entry.get('title') or ''}[/dim]"
+            )
+        if evidence:
+            for issue in (vhost.get("issues") or [])[:4]:
+                console.print(f"    [dim]• {issue}[/dim]")
+        console.print()
+
+    subdomain_brute = result.enriched.get("subdomain_brute") or {}
+    if subdomain_brute and show_module("bruteforce"):
+        console.print("  [dim]── subdomain brute ────────────────────[/dim]")
+        brute_found = subdomain_brute.get("found") or []
+        console.print(
+            f"  [cyan]found[/cyan] {len(brute_found)} "
+            f"[dim]({subdomain_brute.get('words_checked', 0)} word(s) + "
+            f"{subdomain_brute.get('permutations_checked', 0)} permutation(s) checked)[/dim]"
+        )
+        for entry in brute_found[:12]:
+            brute_ips = entry.get("ips") or []
+            brute_ips_label = ", ".join(str(ip) for ip in brute_ips[:3]) if brute_ips else "no A record"
+            console.print(f"  [cyan]{entry.get('host')}[/cyan] [dim]{brute_ips_label}[/dim]")
+        brute_wildcard = subdomain_brute.get("wildcard") or {}
+        if brute_wildcard.get("detected"):
+            console.print("  [yellow]wildcard DNS detected[/yellow] [dim]- reported hosts may include catch-all false positives[/dim]")
+        if evidence:
+            for issue in (subdomain_brute.get("issues") or [])[:4]:
+                console.print(f"    [dim]• {issue}[/dim]")
+        console.print()
+
+    sri = result.enriched.get("sri") or {}
+    if sri and show_module("sri"):
+        console.print("  [dim]── subresource integrity ─────────────[/dim]")
+        sri_score = sri.get("score")
+        sri_color = "green" if (sri_score or 0) >= 80 else "yellow" if (sri_score or 0) >= 50 else "red"
+        console.print(
+            f"  [cyan]score[/cyan] [{sri_color}]{sri_score}/100[/{sri_color}]  "
+            f"[dim]{sri.get('scripts_missing_integrity', 0)}/{sri.get('scripts_total', 0)} script(s) and "
+            f"{sri.get('stylesheets_missing_integrity', 0)}/{sri.get('stylesheets_total', 0)} stylesheet(s) without integrity[/dim]"
+        )
+        sri_findings = sri.get("findings") or []
+        third_party_findings = [finding for finding in sri_findings if finding.get("third_party")]
+        for finding in third_party_findings[:8]:
+            console.print(f"  [yellow]third-party[/yellow] {finding.get('type')} {finding.get('src')} [dim]{finding.get('issue')}[/dim]")
+        if evidence:
+            for finding in sri_findings[:8]:
+                if not finding.get("third_party"):
+                    console.print(f"    [dim]{finding.get('type')} {finding.get('src')}: {finding.get('issue')}[/dim]")
+        console.print()
+
     if show_module("headers"):
         normalized_headers = {str(key).lower(): value for key, value in result.headers.items()}
         sec_headers = [
@@ -458,6 +693,16 @@ def result_to_dict(result: ScanResult) -> dict:
         "api_surface": result.enriched.get("api_surface", {}),
         "email_security": result.enriched.get("email_security", {}),
         "http_posture": result.enriched.get("http_posture", {}),
+        "dns_deep": result.enriched.get("dns_deep", {}),
+        "email_auth": result.enriched.get("email_auth", {}),
+        "asn_intel": result.enriched.get("asn_intel", {}),
+        "reputation": result.enriched.get("reputation", {}),
+        "cloud_buckets": result.enriched.get("cloud_buckets", {}),
+        "exposure": result.enriched.get("exposure", {}),
+        "http_protocol": result.enriched.get("http_protocol", {}),
+        "vhost": result.enriched.get("vhost", {}),
+        "subdomain_brute": result.enriched.get("subdomain_brute", {}),
+        "sri": result.enriched.get("sri", {}),
         "eol_technologies": result.enriched.get("eol_technologies", []),
         "risk": result.enriched.get("risk", {}),
         "security_grade": result.enriched.get("security_grade", {}),
@@ -495,6 +740,21 @@ def render_html_report(results: list[ScanResult]) -> str:
             ("Open ports", data["open_ports"]),
             ("Directories", data["directories"]),
         ]:
+            if values:
+                recon_lines.append(f"<strong>{label}:</strong> {html.escape(str(values))}")
+        for label, key in [
+            ("Deep DNS", "dns_deep"),
+            ("Email auth", "email_auth"),
+            ("ASN intel", "asn_intel"),
+            ("Reputation", "reputation"),
+            ("Cloud buckets", "cloud_buckets"),
+            ("Exposure", "exposure"),
+            ("HTTP protocol", "http_protocol"),
+            ("Virtual hosts", "vhost"),
+            ("Subdomain brute", "subdomain_brute"),
+            ("SRI", "sri"),
+        ]:
+            values = data.get(key)
             if values:
                 recon_lines.append(f"<strong>{label}:</strong> {html.escape(str(values))}")
         if data["whois_summary"]:
@@ -579,6 +839,21 @@ def render_markdown_report(results: list[ScanResult]) -> str:
             lines.append(f"- Directories: {result.directories}")
         if result.extra_intel:
             lines.append(f"- Public intel: {result.extra_intel}")
+        for label, key in [
+            ("Deep DNS", "dns_deep"),
+            ("Email auth", "email_auth"),
+            ("ASN intel", "asn_intel"),
+            ("Reputation", "reputation"),
+            ("Cloud buckets", "cloud_buckets"),
+            ("Exposure", "exposure"),
+            ("HTTP protocol", "http_protocol"),
+            ("Virtual hosts", "vhost"),
+            ("Subdomain brute", "subdomain_brute"),
+            ("SRI", "sri"),
+        ]:
+            values = (result.enriched or {}).get(key)
+            if values:
+                lines.append(f"- {label}: {values}")
 
     if not results:
         lines.append("No results.")
@@ -643,6 +918,7 @@ ABOUT_EXAMPLES = (
     "inoue --json -o report.json https://target.example",
     "inoue watch https://target.example --interval 300 --iterations 0",
     "inoue --webhook-url https://hooks.example/inoue --webhook-format slack https://target.example",
+    "inoue --dns-deep --email-auth --exposure --subdomain-brute https://target.example",
 )
 
 
@@ -947,7 +1223,7 @@ def main(
     plugin_dir: Optional[str] = typer.Option(None, "--plugin-dir", help="Additional directory containing result plugins"),
     no_banner: bool = typer.Option(False, "--no-banner", help="Suppress banner"),
     api_key: Optional[str] = typer.Option(None, "--api-key", help="Optional API key for enrichment services"),
-    modules: Optional[list[str]] = typer.Option(None, "--module", "-m", help="Select recon modules: headers, dns, ssl, whois, subdomains, mail, tech, ports, extra, fast, full-recon, or all"),
+    modules: Optional[list[str]] = typer.Option(None, "--module", "-m", help="Select recon modules: headers, dns, ssl, whois, subdomains, mail, tech, ports, extra, dnsdeep, emailauth, asn, reputation, cloud, exposure, protocol, vhost, bruteforce, sri, fast, full-recon, or all"),
     service: bool = typer.Option(False, "--service", help="Run service/technology fingerprint detection only"),
     headers: bool = typer.Option(False, "--headers", help="Enable header-based detection"),
     dns: bool = typer.Option(False, "--dns", help="Enable DNS enumeration"),
@@ -975,6 +1251,16 @@ def main(
     api_discovery: bool = typer.Option(False, "--api-discovery", help="Probe conventional API doc paths (swagger/openapi) and check whether GraphQL introspection is enabled"),
     email_security: bool = typer.Option(False, "--email-security", help="Analyze SPF/DMARC/DKIM/MTA-STS posture from DNS records (fully passive)"),
     http_methods: bool = typer.Option(False, "--http-methods", help="Ask the server which HTTP methods it allows via a single OPTIONS request"),
+    dns_deep: bool = typer.Option(False, "--dns-deep", help="Deep DNS from records only: CAA, DNSSEC (DS/DNSKEY), SRV services, NS-to-IP resolution, wildcard detection, and a read-only AXFR attempt (DNS-only)"),
+    email_auth: bool = typer.Option(False, "--email-auth", help="Email authentication posture: BIMI, TLS-RPT, MTA-STS policy, DKIM selectors and key sizes, DMARC detail, and a 0-100 score (DNS-only)"),
+    asn_intel: bool = typer.Option(False, "--asn", help="Map the target IP to its ASN, announced prefix, registry, country and allocation date via Team Cymru (DNS-only)"),
+    reputation_check: bool = typer.Option(False, "--reputation", help="Reputation for the target IP: Shodan InternetDB ports/hostnames/vulns plus DNSBL listing status (DNS-only for the blocklists)"),
+    cloud_buckets: bool = typer.Option(False, "--cloud-buckets", help="Probe AWS S3, GCS and Azure Blob for buckets matching the domain's naming convention; sends requests to those third-party providers"),
+    exposure_check: bool = typer.Option(False, "--exposure", help="Probe a fixed list of sensitive paths (.git, .env, backups, dumps, phpinfo, security.txt, crossdomain.xml, source maps) and content-verify every 200; sends extra requests to the target"),
+    http_protocol: bool = typer.Option(False, "--http-protocol", help="Report the negotiated HTTP version plus HTTP/2, HTTP/3, Alt-Svc, compression and Server-Timing from the response already fetched"),
+    vhost_discovery: bool = typer.Option(False, "--vhost", help="Discover virtual hosts by varying the Host header against the target IP; sends extra requests to the target"),
+    subdomain_brute: bool = typer.Option(False, "--subdomain-brute", help="Brute-force subdomains from a built-in wordlist plus permutations, with wildcard-DNS detection; sends many DNS queries"),
+    sri_audit: bool = typer.Option(False, "--sri", help="Audit Subresource Integrity for scripts/stylesheets in the fetched page and flag third-party resources loaded without integrity hashes"),
     scope_file: Optional[str] = typer.Option(None, "--scope", help="Path to a scope file (in-scope/out-of-scope domains and CIDR ranges, one per line, '!' prefix for deny). Refuses to scan any target not in scope before making any request."),
     save_history: bool = typer.Option(False, "--save-history", help="Append this scan's result to the local history DB for later 'inoue history' timelines"),
     history_path: Optional[str] = typer.Option(None, "--history-path", help="SQLite history DB path (default ~/.cache/inoue/history.db)"),
@@ -1079,6 +1365,20 @@ def main(
             console.print("[red]missing target[/red]. Usage: python inoue.py history TARGET")
             raise typer.Exit(2)
         run_history_command(history_target, history_path=history_db_path, limit=history_limit, json_out=history_json)
+        raise typer.Exit()
+
+    if targets and targets[0] == "update":
+        # The variadic `targets` argument consumes the first positional token,
+        # so Typer never dispatches the registered `update` command. Handle it
+        # here, mirroring the `about` / `history` / `update-cve` dispatch below.
+        command_args = targets[1:]
+        if "--help" in command_args or "-h" in command_args:
+            console.print("Usage: python inoue.py update")
+            raise typer.Exit()
+        for argument in command_args:
+            console.print(f"[red]unknown update option[/red] {argument}")
+            raise typer.Exit(2)
+        update()
         raise typer.Exit()
 
     if targets and targets[0] == "update-cve":
@@ -1258,6 +1558,28 @@ def main(
         modules.append("passive")
     if company:
         modules.append("company")
+    # Out-of-plan recon modules: the CLI flag appends its module name so the
+    # same capability is reachable through `-m <name>` as well.
+    if dns_deep:
+        modules.append("dnsdeep")
+    if email_auth:
+        modules.append("emailauth")
+    if asn_intel:
+        modules.append("asn")
+    if reputation_check:
+        modules.append("reputation")
+    if cloud_buckets:
+        modules.append("cloud")
+    if exposure_check:
+        modules.append("exposure")
+    if http_protocol:
+        modules.append("protocol")
+    if vhost_discovery:
+        modules.append("vhost")
+    if subdomain_brute:
+        modules.append("bruteforce")
+    if sri_audit:
+        modules.append("sri")
     # --fail-on-cve is meaningless without CVE correlation, so requesting it
     # must also turn correlation on; otherwise the flag silently does nothing.
     cve_requested = bool(cve) or fail_on_cve
@@ -1327,6 +1649,16 @@ def main(
                 api_discovery=api_discovery,
                 email_security=email_security,
                 http_methods=http_methods,
+                dns_deep=dns_deep,
+                email_auth=email_auth,
+                asn_intel=asn_intel,
+                reputation_check=reputation_check,
+                cloud_buckets=cloud_buckets,
+                exposure_check=exposure_check,
+                http_protocol=http_protocol,
+                vhost_discovery=vhost_discovery,
+                subdomain_brute=subdomain_brute,
+                sri_audit=sri_audit,
                 scope_file=scope_file,
                 active_subdomains=active_subdomains,
                 active_ports=active_ports,
@@ -1361,6 +1693,16 @@ def main(
                         api_discovery=api_discovery,
                         email_security=email_security,
                         http_methods=http_methods,
+                        dns_deep=dns_deep,
+                        email_auth=email_auth,
+                        asn_intel=asn_intel,
+                        reputation_check=reputation_check,
+                        cloud_buckets=cloud_buckets,
+                        exposure_check=exposure_check,
+                        http_protocol=http_protocol,
+                        vhost_discovery=vhost_discovery,
+                        subdomain_brute=subdomain_brute,
+                        sri_audit=sri_audit,
                         scope_file=scope_file,
                         active_subdomains=active_subdomains,
                         active_ports=active_ports,
