@@ -8,6 +8,13 @@ python-whois>=0.8
 requests>=2.31
 beautifulsoup4>=4.12
 sslyze>=6.0.0
+# Registrable-domain parsing (core/cloud_buckets.py, core/sri.py,
+# core/dns_deep.py), hardened XML parsing so untrusted sitemaps and
+# crossdomain.xml cannot trigger XXE/billion-laughs (core/exposure.py), and
+# HTTP/2 support so httpx can negotiate h2 (core/http_protocol.py):
+tldextract>=5.1
+defusedxml>=0.7
+h2>=4.1
 tomli>=2.0; python_version < "3.11"
 
 # --- Optional extras --------------------------------------------------------
@@ -31,3 +38,19 @@ tomli>=2.0; python_version < "3.11"
 #
 # MCP server (mcp_server.py):
 #     pip install mcp>=1.0                       # or: pip install -e ".[mcp]"
+#
+# Opt-in recon tooling. Each of these is imported behind a try/except
+# ImportError in the module it serves, so the CLI and everything above works
+# without them - install only when you want the extra signal:
+#     pip install wafw00f>=2.4 pydnsbl>=1.1 pyasn>=1.6
+#                                                # or: pip install -e ".[recon]"
+#
+#   wafw00f - active WAF fingerprinting. NOTE the import path is
+#             `from wafw00f.main import WAFW00F`, not `from wafw00f import WAFW00F`.
+#   pydnsbl - extra DNS blocklist sources for core/reputation.py.
+#   pyasn   - optional offline ASN cross-check for core/asn_intel.py; it only
+#             runs when a local ipasn database file is found.
+#
+# Deliberately NOT added: checkdmarc (Apache-2.0). Its `cryptography>=50.0.0`
+# pin breaks pyOpenSSL 25.1.0 and `import checkdmarc` fails outright in this
+# environment, so email authentication is checked with dnspython instead.

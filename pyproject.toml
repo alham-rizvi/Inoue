@@ -1,6 +1,6 @@
 [project]
 name = "inoue"
-version = "2.0.0"
+version = "2.1.0"
 description = "Inoue — fast tech stack fingerprinting CLI"
 readme = {file = "README.md", content-type = "text/markdown"}
 authors = [{name = "Alham Rizvi"}]
@@ -14,6 +14,14 @@ dependencies = [
 	"requests>=2.31",
 	"beautifulsoup4>=4.12",
 	"sslyze>=6.0.0",
+	# Recon modules under core/: registrable-domain parsing (cloud_buckets,
+	# sri, dns_deep), hardened XML parsing so untrusted sitemaps and
+	# crossdomain.xml cannot trigger XXE/billion-laughs (exposure), and HTTP/2
+	# support so httpx can negotiate h2 (http_protocol). Opt-in active tooling
+	# lives in the `recon` extra below.
+	"tldextract>=5.1",
+	"defusedxml>=0.7",
+	"h2>=4.1",
 	"tomli>=2.0; python_version < '3.11'",
 ]
 
@@ -29,6 +37,16 @@ mcp = [
 ]
 hashing = [
 	"mmh3>=4.0",
+]
+recon = [
+	# Opt-in recon tooling. Each is imported behind a try/except ImportError in
+	# the module it serves, so the core install works without them:
+	#   wafw00f -> active WAF fingerprinting (`from wafw00f.main import WAFW00F`)
+	#   pydnsbl -> extra DNS blocklist sources for core/reputation.py
+	#   pyasn   -> optional offline ASN cross-check for core/asn_intel.py
+	"wafw00f>=2.4",
+	"pydnsbl>=1.1",
+	"pyasn>=1.6",
 ]
 
 [project.scripts]
