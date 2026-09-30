@@ -519,6 +519,41 @@ def _resolve_ip(hostname: str) -> str:
         return ""
 
 
+def _scope_ip_candidates(hostname: str, resolved_ip: Optional[str] = None) -> list[str]:
+    """Addresses that may authorise ``hostname`` under a scope file.
+
+    ``Scope.allows`` consults its IP/CIDR entries only through its ``ip``
+    argument, so an address in a scope file can never authorise a target unless
+    one is offered. An IP-literal target (``http://127.0.0.1/``) has no domain
+    name to match, so the literal itself is the candidate; an already-resolved
+    address is used as well when the caller has one.
+    """
+    candidates: list[str] = []
+    for candidate in (resolved_ip, hostname):
+        if not candidate or candidate in candidates:
+            continue
+        try:
+            ipaddress.ip_address(candidate)
+        except ValueError:
+            continue
+        candidates.append(candidate)
+    return candidates
+
+
+def _scope_allows_target(scope, hostname: str, resolved_ip: Optional[str] = None) -> bool:
+    """True when ``scope`` authorises ``hostname`` by name *or* by address.
+
+    Purely additive over the original ``scope.allows(hostname)`` check: with no
+    address candidate this is exactly that call, so hostname matching and
+    deny-wins are unchanged. The address is consulted only as an additional way
+    to authorise, which is what lets a scope file that lists an IP or CIDR
+    cover an IP-literal target.
+    """
+    if scope.allows(hostname):
+        return True
+    return any(scope.allows(hostname, ip=ip) for ip in _scope_ip_candidates(hostname, resolved_ip))
+
+
 SMART_TOKENS = {
     "hs-scripts": "HubSpot",
     "hubspot": "HubSpot",
@@ -563,6 +598,16 @@ RECON_MODULE_NAMES = (
     "passive",
     "company",
     "cve",
+    "dnsdeep",
+    "emailauth",
+    "asn",
+    "reputation",
+    "cloud",
+    "exposure",
+    "protocol",
+    "vhost",
+    "bruteforce",
+    "sri",
 )
 
 RECON_MODULE_PRESETS = ("fast", "full-recon", "all")
@@ -582,6 +627,15 @@ RECON_MODULE_ALIASES = {
     "organization": "company",
     "cves": "cve",
     "intel": "extra",
+    "dns-deep": "dnsdeep",
+    "email-auth": "emailauth",
+    "cloud-buckets": "cloud",
+    "http-protocol": "protocol",
+    "subdomain-brute": "bruteforce",
+    "host-header": "vhost",
+    "threat-intel": "reputation",
+    "dns-depth": "dnsdeep",
+    "email-posture": "emailauth",
 }
 
 VALID_RECON_MODULES = frozenset(RECON_MODULE_NAMES) | frozenset(RECON_MODULE_PRESETS) | frozenset(RECON_MODULE_ALIASES)
@@ -607,6 +661,9 @@ def build_recon_plan(requested: Optional[list[str]] = None) -> dict:
     selected = set()
     for item in requested:
         selected.add(item.lower())
+    # Resolve alias spellings to the module they name ("dns-deep" -> "dnsdeep"),
+    # so any name VALID_RECON_MODULES advertises also builds a non-empty plan.
+    selected |= {RECON_MODULE_ALIASES[name] for name in list(selected) if name in RECON_MODULE_ALIASES}
 
     full_recon = "full-recon" in selected or "full_recon" in selected or "all" in selected
     fast_scan = "fast" in selected or "fast-scan" in selected or "fast_scan" in selected
@@ -626,10 +683,20 @@ def build_recon_plan(requested: Optional[list[str]] = None) -> dict:
         modules["subdomains"] = True
         modules["ports"] = True
         modules["extra"] = True
+        modules["vhost"] = True
+        modules["bruteforce"] = True
+        modules["exposure"] = True
+        modules["cloud"] = True
+        modules["protocol"] = True
+        modules["sri"] = True
     if passive_recon:
         modules["passive"] = True
         modules["subdomains"] = True
         modules["extra"] = True
+        modules["dnsdeep"] = True
+        modules["emailauth"] = True
+        modules["asn"] = True
+        modules["reputation"] = True
     if company_intel:
         modules["company"] = True
         modules["extra"] = True
@@ -652,6 +719,16 @@ def build_recon_plan(requested: Optional[list[str]] = None) -> dict:
             "ports": False,
             "extra": False,
             "smart": True,
+            "dnsdeep": False,
+            "emailauth": False,
+            "asn": False,
+            "reputation": False,
+            "cloud": False,
+            "exposure": False,
+            "protocol": False,
+            "vhost": False,
+            "bruteforce": False,
+            "sri": False,
         })
 
     if "intel" in selected:
@@ -671,6 +748,16 @@ def build_recon_plan(requested: Optional[list[str]] = None) -> dict:
             "active": True,
             "passive": True,
             "company": True,
+            "dnsdeep": True,
+            "emailauth": True,
+            "asn": True,
+            "reputation": True,
+            "cloud": True,
+            "exposure": True,
+            "protocol": True,
+            "vhost": True,
+            "bruteforce": True,
+            "sri": True,
         })
     return modules
 
@@ -1251,11 +1338,14 @@ def _run_takeover_check(hostname: str, subdomains: list, dns_records: dict, time
             hosts.append(name)
 
     if scope_file:
-        from core.scope import filter_hosts, parse_scope_file, scope_file_problem
+        from core.scope import parse_scope_file, scope_file_problem
 
         if scope_file_problem(scope_file):
             return []
-        hosts = filter_hosts(hosts, parse_scope_file(scope_file))
+        scope = parse_scope_file(scope_file)
+        # Same decision as the scan gate, so an IP-literal target is authorised
+        # by an address entry here too instead of being silently dropped.
+        hosts = [host for host in hosts if host and _scope_allows_target(scope, host)]
         if not hosts:
             return []
 
@@ -1279,6 +1369,56 @@ def _run_http_posture(headers: dict, final_url: str, history, check_methods: boo
     from core import http_posture
     return http_posture.analyze(headers, final_url, history=history,
                                 check_methods=check_methods, timeout=timeout)
+
+
+def _run_dns_deep(hostname: str, timeout: int) -> dict:
+    from core import dns_deep
+    return dns_deep.analyze(hostname, timeout=timeout)
+
+
+def _run_email_auth(hostname: str, timeout: int) -> dict:
+    from core import email_auth as email_auth_module
+    return email_auth_module.analyze(hostname, timeout=max(2, min(5, timeout)))
+
+
+def _run_asn_intel(ip: str, timeout: int) -> dict:
+    from core import asn_intel
+    return asn_intel.analyze(ip, timeout=timeout)
+
+
+def _run_reputation(ip: str, hostname: str, timeout: int) -> dict:
+    from core import reputation
+    return reputation.analyze(ip, domain=hostname, timeout=timeout)
+
+
+def _run_cloud_buckets(hostname: str, timeout: int) -> dict:
+    from core import cloud_buckets
+    return cloud_buckets.enumerate_buckets(hostname, timeout=timeout, max_candidates=12)
+
+
+def _run_exposure(base_url: str, timeout: int) -> dict:
+    from core import exposure
+    return exposure.analyze(base_url, timeout=timeout, max_paths=24)
+
+
+def _run_http_protocol(headers: dict, final_url: str, timeout: int) -> dict:
+    from core import http_protocol
+    return http_protocol.analyze(headers, url=final_url, timeout=timeout)
+
+
+def _run_vhost(ip: str, hostname: str, timeout: int) -> dict:
+    from core import vhost
+    return vhost.discover(ip, hostname, timeout=timeout, max_candidates=20)
+
+
+def _run_subdomain_brute(hostname: str, timeout: int) -> dict:
+    from core import subdomain_brute
+    return subdomain_brute.bruteforce(hostname, timeout=timeout, max_candidates=200, workers=20)
+
+
+def _run_sri(body: str, base_url: str, timeout: int) -> dict:
+    from core import sri
+    return sri.audit(body, base_url=base_url, timeout=timeout)
 
 
 def _collect_external_tool_results(recon_results: dict) -> dict:
@@ -1689,6 +1829,16 @@ async def _async_scan_target(
     email_security: bool = False,
     http_methods: bool = False,
     scope_file: Optional[str] = None,
+    dns_deep: bool = False,
+    email_auth: bool = False,
+    asn_intel: bool = False,
+    reputation_check: bool = False,
+    cloud_buckets: bool = False,
+    exposure_check: bool = False,
+    http_protocol: bool = False,
+    vhost_discovery: bool = False,
+    subdomain_brute: bool = False,
+    sri_audit: bool = False,
 ) -> ScanResult:
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
@@ -1715,7 +1865,7 @@ async def _async_scan_target(
                 progress(result.error)
             return result
         scope = parse_scope_file(scope_file)
-        if not scope.allows(parsed.hostname or ""):
+        if not _scope_allows_target(scope, parsed.hostname or "", result.ip):
             result.error = f"'{parsed.hostname}' is not in scope per {scope_file} - refusing to scan without making any request."
             if progress:
                 progress(result.error)
@@ -1839,6 +1989,26 @@ async def _async_scan_target(
         tasks.append(("ext_urls", lambda: external_tools.harvest_urls(hostname, result.final_url, timeout=max(15, timeout * 4))))
     if screenshot and hostname:
         tasks.append(("ext_screenshot", lambda: external_tools.run_gowitness(result.final_url, screenshot_dir, timeout=max(10, timeout * 3))))
+    if (dns_deep or plan.get("dnsdeep")) and hostname:
+        tasks.append(("dns_deep", lambda: _run_dns_deep(hostname, timeout)))
+    if (email_auth or plan.get("emailauth")) and hostname:
+        tasks.append(("email_auth", lambda: _run_email_auth(hostname, timeout)))
+    if (asn_intel or plan.get("asn")) and result.ip:
+        tasks.append(("asn_intel", lambda: _run_asn_intel(result.ip, timeout)))
+    if (reputation_check or plan.get("reputation")) and result.ip:
+        tasks.append(("reputation", lambda: _run_reputation(result.ip, hostname, timeout)))
+    if (cloud_buckets or plan.get("cloud")) and hostname:
+        tasks.append(("cloud_buckets", lambda: _run_cloud_buckets(hostname, timeout)))
+    if (exposure_check or plan.get("exposure")) and result.final_url:
+        tasks.append(("exposure", lambda: _run_exposure(result.final_url, timeout)))
+    if http_protocol or plan.get("protocol"):
+        tasks.append(("http_protocol", lambda: _run_http_protocol(result.headers, result.final_url, timeout)))
+    if (vhost_discovery or plan.get("vhost")) and result.ip and hostname:
+        tasks.append(("vhost", lambda: _run_vhost(result.ip, hostname, timeout)))
+    if (subdomain_brute or plan.get("bruteforce")) and hostname:
+        tasks.append(("subdomain_brute", lambda: _run_subdomain_brute(hostname, timeout)))
+    if sri_audit or plan.get("sri"):
+        tasks.append(("sri", lambda: _run_sri(response.text, result.final_url, timeout)))
     if tasks:
         task_results = await asyncio.gather(
             *(asyncio.to_thread(task) for _, task in tasks),
@@ -1879,6 +2049,36 @@ async def _async_scan_target(
     external_results = _collect_external_tool_results(recon_results)
     if external_results:
         result.enriched["external_tools"] = external_results
+    dns_deep_payload = recon_results.get("dns_deep")
+    if dns_deep_payload:
+        result.enriched["dns_deep"] = dns_deep_payload
+    email_auth_payload = recon_results.get("email_auth")
+    if email_auth_payload:
+        result.enriched["email_auth"] = email_auth_payload
+    asn_intel_payload = recon_results.get("asn_intel")
+    if asn_intel_payload:
+        result.enriched["asn_intel"] = asn_intel_payload
+    reputation_payload = recon_results.get("reputation")
+    if reputation_payload:
+        result.enriched["reputation"] = reputation_payload
+    cloud_buckets_payload = recon_results.get("cloud_buckets")
+    if cloud_buckets_payload:
+        result.enriched["cloud_buckets"] = cloud_buckets_payload
+    exposure_payload = recon_results.get("exposure")
+    if exposure_payload:
+        result.enriched["exposure"] = exposure_payload
+    http_protocol_payload = recon_results.get("http_protocol")
+    if http_protocol_payload:
+        result.enriched["http_protocol"] = http_protocol_payload
+    vhost_payload = recon_results.get("vhost")
+    if vhost_payload:
+        result.enriched["vhost"] = vhost_payload
+    subdomain_brute_payload = recon_results.get("subdomain_brute")
+    if subdomain_brute_payload:
+        result.enriched["subdomain_brute"] = subdomain_brute_payload
+    sri_payload = recon_results.get("sri")
+    if sri_payload:
+        result.enriched["sri"] = sri_payload
     company_intel = _collect_company_intel(hostname, response.text, result.headers)
     if company_intel:
         result.extra_intel.setdefault("company", {})
@@ -1935,6 +2135,16 @@ async def scan_many(
     email_security: bool = False,
     http_methods: bool = False,
     scope_file: Optional[str] = None,
+    dns_deep: bool = False,
+    email_auth: bool = False,
+    asn_intel: bool = False,
+    reputation_check: bool = False,
+    cloud_buckets: bool = False,
+    exposure_check: bool = False,
+    http_protocol: bool = False,
+    vhost_discovery: bool = False,
+    subdomain_brute: bool = False,
+    sri_audit: bool = False,
 ) -> list[ScanResult]:
     """Scan multiple targets concurrently using one shared async HTTP client."""
     if not targets:
@@ -1986,6 +2196,9 @@ async def scan_many(
                 harvest_urls, screenshot, screenshot_dir, crawl_katana,
                 js_intel, js_intel_bundles, check_takeover, api_discovery,
                 email_security, http_methods, scope_file,
+                dns_deep, email_auth, asn_intel, reputation_check,
+                cloud_buckets, exposure_check, http_protocol, vhost_discovery,
+                subdomain_brute, sri_audit,
             )
             if cache and not result.error:
                 cache.set(target, cache_module, _serialize_scan_result(result))
@@ -2303,6 +2516,16 @@ def scan(
     email_security: bool = False,
     http_methods: bool = False,
     scope_file: Optional[str] = None,
+    dns_deep: bool = False,
+    email_auth: bool = False,
+    asn_intel: bool = False,
+    reputation_check: bool = False,
+    cloud_buckets: bool = False,
+    exposure_check: bool = False,
+    http_protocol: bool = False,
+    vhost_discovery: bool = False,
+    subdomain_brute: bool = False,
+    sri_audit: bool = False,
 ) -> ScanResult:
     def report(message: str):
         if progress:
@@ -2335,7 +2558,7 @@ def scan(
             report(result.error)
             return result
         scope = parse_scope_file(scope_file)
-        if not scope.allows(hostname):
+        if not _scope_allows_target(scope, hostname, result.ip):
             result.error = f"'{hostname}' is not in scope per {scope_file} - refusing to scan without making any request."
             report(result.error)
             return result
@@ -2504,6 +2727,46 @@ def scan(
     if screenshot and hostname:
         ext_timeout = max(10, timeout * 3)
         tasks.append(("ext_screenshot", lambda: external_tools.run_gowitness(result.final_url, screenshot_dir, timeout=ext_timeout), ext_timeout + 5))
+    if (dns_deep or plan.get("dnsdeep")) and hostname:
+        dd_timeout = max(5, timeout)
+        # dns_deep walks NS/MX/TXT/CAA/SOA plus DMARC/DKIM/SPF lookups.
+        tasks.append(("dns_deep", lambda: _run_dns_deep(hostname, dd_timeout), (dd_timeout * 10) + 10))
+    if (email_auth or plan.get("emailauth")) and hostname:
+        ea_timeout = max(2, min(5, timeout))
+        tasks.append(("email_auth", lambda: _run_email_auth(hostname, timeout), (ea_timeout * 14) + 10))
+    if (asn_intel or plan.get("asn")) and result.ip:
+        ai_timeout = max(5, timeout)
+        tasks.append(("asn_intel", lambda: _run_asn_intel(result.ip, ai_timeout), ai_timeout + 10))
+    if (reputation_check or plan.get("reputation")) and result.ip:
+        rp_timeout = max(6, timeout)
+        tasks.append(("reputation", lambda: _run_reputation(result.ip, hostname, rp_timeout), (rp_timeout * 6) + 10))
+    if (cloud_buckets or plan.get("cloud")) and hostname:
+        cb_timeout = max(5, timeout)
+        # 12 candidate names probed against each of the 3 providers.
+        tasks.append(("cloud_buckets", lambda: _run_cloud_buckets(hostname, cb_timeout), (cb_timeout * 6) + 10))
+    if (exposure_check or plan.get("exposure")) and result.final_url:
+        ex_timeout = max(5, timeout)
+        # up to 24 artefact paths, plus the base page and any script source maps.
+        tasks.append(("exposure", lambda: _run_exposure(result.final_url, ex_timeout), (ex_timeout * 10) + 10))
+    if http_protocol or plan.get("protocol"):
+        hp_timeout = max(5, timeout)
+        tasks.append(("http_protocol", lambda: _run_http_protocol(result.headers, result.final_url, hp_timeout), (hp_timeout * 3) + 10))
+    if (vhost_discovery or plan.get("vhost")) and result.ip and hostname:
+        vh_timeout = max(5, timeout)
+        # up to 20 candidate Host values probed against the resolved IP.
+        tasks.append(("vhost", lambda: _run_vhost(result.ip, hostname, vh_timeout), (vh_timeout * 10) + 10))
+    if (subdomain_brute or plan.get("bruteforce")) and hostname:
+        sb_timeout = max(3, timeout)
+        # 200 candidates spread across 20 workers.
+        tasks.append(("subdomain_brute", lambda: _run_subdomain_brute(hostname, sb_timeout), (sb_timeout * 20) + 10))
+    if sri_audit or plan.get("sri"):
+        sri_timeout = max(5, timeout)
+        # Pure and offline: audits the integrity/crossorigin attributes of the
+        # scripts and stylesheets already present in the fetched body. No
+        # subresource is ever requested and no hash is recomputed, so the
+        # timeout is accepted for signature symmetry and the budget below is
+        # nominal rather than a real network allowance.
+        tasks.append(("sri", lambda: _run_sri(body, result.final_url, sri_timeout), (sri_timeout * 6) + 10))
 
     if progress and tasks:
         report(f"enqueueing {len(tasks)} recon tasks")
@@ -2568,6 +2831,36 @@ def scan(
     external_results = _collect_external_tool_results(recon_results)
     if external_results:
         result.enriched["external_tools"] = external_results
+    dns_deep_payload = recon_results.get("dns_deep")
+    if dns_deep_payload:
+        result.enriched["dns_deep"] = dns_deep_payload
+    email_auth_payload = recon_results.get("email_auth")
+    if email_auth_payload:
+        result.enriched["email_auth"] = email_auth_payload
+    asn_intel_payload = recon_results.get("asn_intel")
+    if asn_intel_payload:
+        result.enriched["asn_intel"] = asn_intel_payload
+    reputation_payload = recon_results.get("reputation")
+    if reputation_payload:
+        result.enriched["reputation"] = reputation_payload
+    cloud_buckets_payload = recon_results.get("cloud_buckets")
+    if cloud_buckets_payload:
+        result.enriched["cloud_buckets"] = cloud_buckets_payload
+    exposure_payload = recon_results.get("exposure")
+    if exposure_payload:
+        result.enriched["exposure"] = exposure_payload
+    http_protocol_payload = recon_results.get("http_protocol")
+    if http_protocol_payload:
+        result.enriched["http_protocol"] = http_protocol_payload
+    vhost_payload = recon_results.get("vhost")
+    if vhost_payload:
+        result.enriched["vhost"] = vhost_payload
+    subdomain_brute_payload = recon_results.get("subdomain_brute")
+    if subdomain_brute_payload:
+        result.enriched["subdomain_brute"] = subdomain_brute_payload
+    sri_payload = recon_results.get("sri")
+    if sri_payload:
+        result.enriched["sri"] = sri_payload
 
     if hostname:
         external = _enrich_with_external_services(hostname, api_key)
