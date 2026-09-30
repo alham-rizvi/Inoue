@@ -43,6 +43,68 @@ _FINDING_WEIGHTS = {
 
 _SENSITIVE_PATHS = (".env", ".git", ".ds_store", "docker-compose", ".aws", "backup", ".bak", "id_rsa")
 
+# The v2 exposure module only emits a `findings` entry once its content verifier
+# has confirmed the artefact, so a finding is by definition verified. Two things
+# are still excluded from the score: `info`-graded findings (an absent
+# security.txt is a missing good practice, not an exposure) and the non-file
+# kinds below, which are different classes of signal.
+_EXPOSURE_UNSCORED_SEVERITIES = ("info",)
+
+# Non-file kinds the exposure module reports alongside its file findings. A
+# permissive crossdomain policy and a published source map are real findings,
+# but neither is "an exposed sensitive file", so neither may be labelled as one
+# in the triage breakdown.
+_EXPOSURE_NON_FILE_KINDS = ("security_txt", "crossdomain_policy", "source_map")
+
+
+def _exposure_findings(exposure) -> list[dict[str, Any]]:
+    """Normalise an ``exposure`` payload into the risk-worthy, *verified* findings.
+
+    Two shapes have to be accepted, because ``enriched`` is also populated by
+    cached results and by older producers:
+
+    * the v2 ``core.exposure`` payload - a dict whose verified artefacts live in
+      ``findings`` (``{"path", "status", "severity", "kind", ...}``) and whose
+      ``candidates`` are explicitly *unverified* 200 responses;
+    * the older per-item rows - ``{"url": ..., "status_code": 200}``, as a list
+      or as a single dict.
+
+    Only verified findings are returned. Letting an unverified candidate drive
+    the score would undo the content verification the exposure module performs
+    precisely so a catch-all/soft-404 responder is not reported as an exposure.
+    """
+    if isinstance(exposure, dict):
+        findings = exposure.get("findings")
+        if findings is None:
+            findings = [exposure]
+    elif isinstance(exposure, list):
+        findings = exposure
+    else:
+        return []
+
+    normalised: list[dict[str, Any]] = []
+    for item in findings or []:
+        if not isinstance(item, dict):
+            continue
+        path = item.get("path") or item.get("url")
+        if not path:
+            continue
+        status = item.get("status", item.get("status_code"))
+        severity = str(item.get("severity") or "").lower()
+        kind = str(item.get("kind") or "")
+        if severity:
+            # New shape: the module already decided this is a real artefact, so
+            # only its `info` grade and its non-file kinds are filtered out.
+            if severity in _EXPOSURE_UNSCORED_SEVERITIES or kind in _EXPOSURE_NON_FILE_KINDS:
+                continue
+        else:
+            # Legacy shape: no severity to trust, so fall back to the
+            # path-marker rule the scorer has always used.
+            if status != 200 or not any(marker in str(path).lower() for marker in _SENSITIVE_PATHS):
+                continue
+        normalised.append({"path": str(path), "status": status, "severity": severity or "unknown"})
+    return normalised
+
 
 def _cve_severity_counts(result) -> dict[str, int]:
     counts = {"critical": 0, "high": 0, "medium": 0}
@@ -86,13 +148,14 @@ def score_result(result) -> dict[str, Any]:
         add("eol_technology", f"{eol['name']} {eol['version']} is EOL ({eol['days_past_eol']}d past {eol['eol_date']})")
 
     # --- exposed sensitive files ---------------------------------------------
-    exposure = enriched.get("exposure") or []
-    if isinstance(exposure, dict):
-        exposure = [exposure]
-    for item in exposure:
-        url = str(item.get("url", "")).lower()
-        if item.get("status_code") == 200 and any(marker in url for marker in _SENSITIVE_PATHS):
-            add("exposed_sensitive_file", f"{item.get('url')} returned 200")
+    # Consumes both the v2 exposure payload (verified `findings`) and the older
+    # per-item rows - see `_exposure_findings`. Unverified candidates never
+    # reach the score.
+    for finding in _exposure_findings(enriched.get("exposure")):
+        detail = f"{finding['path']} returned {finding['status']}"
+        if finding["severity"] != "unknown":
+            detail += f" ({finding['severity']})"
+        add("exposed_sensitive_file", detail)
 
     # --- API surface ----------------------------------------------------------
     api_surface = enriched.get("api_surface") or {}
