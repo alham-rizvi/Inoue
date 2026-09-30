@@ -6,11 +6,17 @@ replaces the former `TODO.md`, `TODO-next-roadmap.md` and
 had drifted into listing the same items as both "completed" and "next
 priority".
 
-Every status below was checked against the codebase on 2026-09-29 rather than
+Every status below was checked against the codebase on 2026-09-30 rather than
 copied from the older docs. Items are only listed as shipped when there is a
 module/flag to point at; everything else is under **Still open**. The
 historical bug write-ups stay in [guides/Bugs-to-fix.md](guides/Bugs-to-fix.md)
 and are linked from here rather than duplicated.
+
+The v2.1.0 release (ten new recon modules, plus the `update`, `--scope` and
+email-authentication fixes) moved three items out of **Still open**; two of them
+only partly, which is stated where it applies. Per the ground rule above, the
+commit hash for each newly shipped row is added when the release is committed -
+the rows are listed now because the module/flag they point at exists.
 
 ## Ground rules (non-negotiable)
 
@@ -30,7 +36,7 @@ and are linked from here rather than duplicated.
 
 | Area | Where it lives |
 |---|---|
-| Scope file with wildcard/CIDR matching and fail-closed behaviour | `core/scope.py` (`Scope`, `parse_scope_file`, `filter_hosts`), `--scope` |
+| Scope file with wildcard/CIDR matching and fail-closed behaviour | `core/scope.py` (`Scope`, `parse_scope_file`, `filter_hosts`), `--scope`; a target is authorised by name *or* by the address it resolves to, so an IP/CIDR entry also covers an IP-literal target |
 | WAF/CDN detection | `core/waf.py`, `result.waf`, CLI "WAF / CDN" section |
 | JavaScript harvesting and intel | `core/js_intel.py`, `--js-intel`, secrets redacted |
 | Subdomain takeover fingerprinting | `core/takeover.py`, `--check-takeover` |
@@ -47,6 +53,16 @@ and are linked from here rather than duplicated.
 | Scan history / timeline | `inoue history`, `core/history.py` |
 | Watch mode | `inoue watch` (commit `62fd3c2`) |
 | Webhook delivery (generic/Slack/Discord) | `--webhook-url`, `--webhook-format` (commit `13ac7f7`) |
+| Deep DNS (CAA, SRV, DNSSEC DS/DNSKEY, NS-to-IP, wildcard detection, read-only AXFR) | `core/dns_deep.py`, `--dns-deep` |
+| Email authentication posture (BIMI, TLS-RPT, MTA-STS, DKIM key sizes, DMARC detail) | `core/email_auth.py`, `--email-auth` |
+| ASN / announced prefix / registry / country | `core/asn_intel.py`, `--asn` |
+| IP reputation (Shodan InternetDB + refusal-aware DNSBL) | `core/reputation.py`, `--reputation` |
+| Cloud storage bucket enumeration | `core/cloud_buckets.py`, `--cloud-buckets` |
+| Sensitive-path exposure sweep with content verification | `core/exposure.py`, `--exposure` |
+| HTTP protocol capability (negotiated version, HTTP/2, HTTP/3/Alt-Svc) | `core/http_protocol.py`, `--http-protocol` |
+| Virtual-host discovery (Host header vs baseline) | `core/vhost.py`, `--vhost` |
+| Subdomain bruteforce with mandatory wildcard-DNS filtering | `core/subdomain_brute.py`, `--subdomain-brute` |
+| Subresource Integrity audit | `core/sri.py`, `--sri` |
 
 Ongoing per-area work is listed under **Still open** even when the surrounding
 feature shipped - a shipped detector is not the same as a finished catalog.
@@ -70,19 +86,16 @@ feature shipped - a shipped detector is not the same as a finished catalog.
 - [ ] **robots.txt intelligence** - parse `Disallow` entries and surface the
       interesting ones (admin/backup/config paths) as a recon signal,
       independent of whether `--respect-robots` is also crawling them.
-- [ ] **Cloud storage bucket enumeration** - permutate the target's
-      name/subdomains against S3/GCS/Azure Blob naming conventions and check
-      existence + public-listing status via a plain GET. Different from the
-      shipped takeover check: this looks for buckets that exist and are
-      misconfigured, not ones that are unclaimed.
 - [ ] **TLS/cipher weakness flagging** - `core/tls_fingerprint.py` already
       captures the negotiated protocol/cipher; nothing yet flags TLSv1.0/1.1 or
       weak cipher suites as a risk factor the way `core/security_grade.py`
       does for headers.
-- [ ] **Mixed content / Subresource Integrity (SRI)** - an HTTPS page loading
-      `http://` resources, or a cross-origin `<script>`/`<link>` without an
-      `integrity` attribute (supply-chain risk). Natural fit next to the
-      existing CSP analysis in `core/http_posture.py`.
+- [ ] **Mixed content detection** - an HTTPS page loading `http://` resources.
+      The SRI half of this item shipped in v2.1 (`core/sri.py`, `--sri`, which
+      flags external scripts/stylesheets without an `integrity` hash); the
+      mixed-content half did not - `core/sri.py` audits only the
+      `integrity`/`crossorigin` attributes and never inspects a resource URL's
+      scheme.
 - [ ] **Headless rendering fallback** (`--render`, Playwright, opt-in). The
       JS-intel module analyzes bundle *text*; it still cannot see what a page
       looks like after JS executes. Trigger automatically when static +
@@ -92,11 +105,12 @@ feature shipped - a shipped detector is not the same as a finished catalog.
 - [ ] **Parameter mining** (`--export-params`) - collect candidate parameter
       names from JS, forms and crawled URLs into a per-target wordlist. Does
       not test anything; hands off to ffuf/Arjun, keeping Inoue in "recon".
-- [ ] **Expanded sensitive-file sweep** - extend `_enumerate_directories`
-      beyond the current small guess list with a curated (not brute-force) set
-      of near-universal exposure paths: `.env`, `.git/config`, `.git/HEAD`,
-      `.DS_Store`, `docker-compose.yml`, `.aws/credentials`, backup patterns
-      (`.bak`, `~`, `.old`). Keep it bounded and rate-limited.
+- [ ] **Two paths the exposure sweep still omits** - v2.1 shipped
+      `core/exposure.py` (`--exposure`) with `.git/HEAD`, `.git/config`,
+      `.env`, `.DS_Store`, backup (`.bak`, `backup.zip`) and dump paths, all
+      content-verified. The original item also named `docker-compose.yml` and
+      `.aws/credentials`, which are not in `_PATHS` yet; they need the same
+      content verification, not a bare 200.
 
 ### Triage and workflow
 
@@ -151,9 +165,9 @@ feature shipped - a shipped detector is not the same as a finished catalog.
    other item below fires more requests per target.
 2. `inoue triage` - smallest amount of new code for the biggest day-to-day
    workflow win, because the scoring logic already exists.
-3. TLS weakness + mixed-content/SRI checks - cheap, same pattern as the
-   existing posture checks, no new dependencies.
-4. robots.txt intelligence + bucket enumeration.
+3. TLS weakness + mixed-content checks - cheap, same pattern as the existing
+   posture checks, no new dependencies (the SRI half shipped in v2.1).
+4. robots.txt intelligence.
 5. `--waf-probe`, WAF-aware nuclei templates, subdomain export adapters.
 6. Scheduled watch/certificate alerting refinements (already partly shipped
    via `inoue watch` + `--webhook-url`).

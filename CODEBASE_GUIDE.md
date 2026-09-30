@@ -20,12 +20,25 @@ This is a recon and surface-analysis tool, not a privileged exploitation framewo
 - `core/cache.py` — opt-in SQLite cache for repeat scan results
 - `core/cve.py` — offline CVE dataset loading and exact version correlation
 - `core/plugins.py` — optional result-plugin discovery and error isolation
+- `core/dns_deep.py` — deep DNS: CAA, DNSSEC (DS/DNSKEY), SRV, NS-to-IP, wildcard detection, read-only AXFR
+- `core/email_auth.py` — BIMI, TLS-RPT, MTA-STS and DKIM/DMARC authentication posture with a score
+- `core/asn_intel.py` — ASN, announced prefix, registry and country for the target IP (Team Cymru DNS)
+- `core/reputation.py` — Shodan InternetDB and refusal-aware DNS blocklist status
+- `core/cloud_buckets.py` — S3/GCS/Azure Blob candidate enumeration with content verification
+- `core/exposure.py` — sensitive-path sweep with content verification against catch-all responders
+- `core/http_protocol.py` — negotiated HTTP version plus HTTP/2 and HTTP/3/Alt-Svc capability
+- `core/vhost.py` — Host-header virtual-host discovery with a baseline-difference check
+- `core/subdomain_brute.py` — wordlist/permutation subdomain bruteforce with wildcard-DNS filtering
+- `core/sri.py` — Subresource Integrity audit for scripts and stylesheets
 - `data/cves.json` — bundled CVE awareness dataset
 - `modules/example_plugin.py.template` — plugin interface template
 - `scripts/check_signatures.py` — duplicate signature key checker and merger
 - `fingerprints/signatures.py` — the primary matching catalog for technologies and services
 - `fingerprints/extended_catalog.py` — supplementary scan catalog and extended platform entries
 - `tests/test_scanner.py` — regression tests for detection correctness and CLI contracts
+- `tests/test_recon_modules_v2.py` — offline unit tests for the ten v2 recon modules
+- `tests/test_flag_matrix.py` — end-to-end matrix running every CLI flag against a local fixture server
+- `tests/test_update_command.py` — regression tests for the `update` subcommand dispatch
 - `README.md` — public project overview and usage examples
 - `GUIDE.md` — catalog extension and version-detection guidance
 - `COMMANDS.md` — CLI command reference

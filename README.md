@@ -28,6 +28,43 @@ It is useful for recon, CTF/HTB, bug bounty, internal network review, and genera
 
 Maintained by **Alham Rizvi**.
 
+## Version 2.1.0
+
+A recon-breadth release: ten new keyless recon modules (24 in total), plus the
+follow-up fixes from the v2.0.0 sweep. Still fully read-only, and no API keys
+are needed for any module.
+
+- deep DNS: CAA, SRV, DNSSEC (DS/DNSKEY), NS-to-IP resolution, wildcard-DNS
+  detection, and a read-only AXFR attempt (`--dns-deep`)
+- email authentication: BIMI, TLS-RPT, MTA-STS policy, DKIM selector probing
+  with key-size estimation, fine-grained DMARC tags, and a 0-100 score
+  (`--email-auth`)
+- ASN, announced prefix, registry, country and allocation date via Team Cymru
+  (`--asn`)
+- IP reputation: Shodan InternetDB ports/hostnames/vulnerabilities plus DNS
+  blocklists that distinguish "not listed" from "could not be checked"
+  (`--reputation`)
+- S3 / GCS / Azure Blob bucket checks derived from the domain, each
+  content-verified so a provider's catch-all page is not a false positive
+  (`--cloud-buckets`)
+- sensitive-path exposure sweep (`.git`, `.env`, backups, dumps, `phpinfo`,
+  `security.txt`, `crossdomain.xml`, source maps) with content verification
+  (`--exposure`)
+- HTTP/2 and HTTP/3/Alt-Svc capability and negotiated-version reporting
+  (`--http-protocol`)
+- Host-header virtual-host discovery with a baseline-difference check
+  (`--vhost`)
+- subdomain bruteforce from a built-in wordlist plus permutations, with
+  mandatory wildcard-DNS filtering (`--subdomain-brute`)
+- Subresource Integrity audit for scripts and stylesheets (`--sri`)
+
+Fixed in this release: the `update` subcommand is reachable again, `--scope`
+now covers IP-literal targets listed by address, and BIMI/TLS-RPT no longer
+report a completed NXDOMAIN as "unknown" (or keep the trailing `;` on BIMI
+URLs).
+
+See [CHANGELOG.md](CHANGELOG.md) for the full list.
+
 ## Version 2.0.0
 
 A major recon and security-posture release, still fully read-only:
@@ -245,6 +282,11 @@ python inoue.py --no-dns -t 5 10.10.11.55
 # Skip SSL checks for HTTP-only or self-signed targets
 python inoue.py --no-ssl https://alhamrizvi.in
 
+# v2.1 recon modules (all keyless, no API keys)
+python inoue.py --dns-deep --email-auth --asn alhamrizvi.in
+python inoue.py --exposure --sri --http-protocol https://alhamrizvi.in
+python inoue.py --cloud-buckets --reputation --vhost alhamrizvi.in
+
 # Pull the latest catalog and scanner updates from the repository
 python inoue.py update
 ```
@@ -290,6 +332,16 @@ layout = "wide" # compact, standard, or wide
 | `--fast` | Fast scan preset (headers + tech) |
 | `--full-recon` | Full recon preset |
 | `--all` | Enable all recon modules |
+| `--dns-deep` | Deep DNS (module `dnsdeep`): CAA, DNSSEC DS/DNSKEY, SRV, NS-to-IP, wildcard detection, read-only AXFR |
+| `--email-auth` | Email authentication posture (module `emailauth`): BIMI, TLS-RPT, MTA-STS policy, DKIM selectors and key sizes, DMARC detail, 0-100 score |
+| `--asn` | Map the target IP to its ASN, announced prefix, registry, country and allocation date (module `asn`) |
+| `--reputation` | Target IP reputation (module `reputation`): Shodan InternetDB plus DNS blocklist status, refusal-aware |
+| `--cloud-buckets` | Probe AWS S3, GCS and Azure Blob for buckets matching the domain's naming convention (module `cloud`) |
+| `--exposure` | Probe a fixed list of sensitive paths and content-verify every 200 (module `exposure`) |
+| `--http-protocol` | Report the negotiated HTTP version plus HTTP/2, HTTP/3/Alt-Svc, compression and Server-Timing (module `protocol`) |
+| `--vhost` | Discover virtual hosts by varying the Host header against the target IP (module `vhost`) |
+| `--subdomain-brute` | Bruteforce subdomains from a built-in wordlist plus permutations, with wildcard-DNS filtering (module `bruteforce`) |
+| `--sri` | Audit Subresource Integrity for scripts and stylesheets, flagging missing integrity hashes (module `sri`) |
 | `-t, --timeout` | HTTP timeout in seconds (default: 10) |
 | `-w, --workers` | Concurrent scan threads (default: 5) |
 | `-l, --list` | Read one target per line from a file |

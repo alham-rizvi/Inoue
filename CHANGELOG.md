@@ -2,7 +2,136 @@
 
 ## Unreleased
 
-- (nothing yet - see TODO-next-roadmap.md for what's planned next)
+- (nothing yet - see ROADMAP.md for what's planned next)
+
+## 2.1.0 - 2026-09-30
+
+A recon-breadth release: ten new keyless recon modules (14 -> 24 modules in the
+planner), the follow-up fixes from the v2.0.0 sweep, and a suite that grew from
+401 to 574 tests. Still fully read-only, and still no API keys anywhere.
+
+### Added
+
+**Ten new recon modules** (all keyless - no API keys, no accounts)
+
+- **Deep DNS** (`--dns-deep`, module `dnsdeep`): CAA records, SRV service
+  discovery, DNSSEC (DS/DNSKEY), NS-to-IP resolution, wildcard-DNS detection,
+  and a read-only AXFR zone-transfer attempt. DNS-only.
+- **Email authentication** (`--email-auth`, module `emailauth`): BIMI, TLS-RPT,
+  a full MTA-STS policy fetch, extended DKIM selector probing with key-size
+  estimation, fine-grained DMARC tags (`sp`, `aspf`, `adkim`, `ruf`, `fo`,
+  `pct`), and a 0-100 score.
+- **ASN intelligence** (`--asn`, module `asn`): ASN, announced prefix,
+  organisation, country, registry and allocation date, via Team Cymru DNS.
+- **Reputation** (`--reputation`, module `reputation`): Shodan InternetDB
+  ports/hostnames/vulnerabilities plus DNS blocklist checks. A resolver that
+  refuses a query (for example Spamhaus's refusal range) is reported as
+  unverifiable, never as "not listed"; a timeout is likewise "unknown, not
+  clean".
+- **Cloud bucket enumeration** (`--cloud-buckets`, module `cloud`): derives
+  candidate S3/GCS/Azure Blob names from the domain and content-verifies every
+  hit, so a provider's catch-all page is not reported as a bucket.
+- **Exposure sweep** (`--exposure`, module `exposure`): a fixed list of
+  sensitive paths (`.git`, `.env`, backups, dumps, `phpinfo`, `security.txt`,
+  `crossdomain.xml`, source maps) with content verification on every 200, so a
+  catch-all/soft-404 responder produces no findings.
+- **HTTP protocol** (`--http-protocol`, module `protocol`): the negotiated HTTP
+  version and TLS protocol (confirmed with one additional request to the
+  target), plus HTTP/2, HTTP/3/Alt-Svc, compression and Server-Timing. A single
+  HTTP/1.1 result never records HTTP/2 as unsupported - it only reports what
+  was observed.
+- **Virtual-host discovery** (`--vhost`, module `vhost`): varies the Host
+  header against the target IP and keeps only responses that differ from the
+  baseline response.
+- **Subdomain bruteforce** (`--subdomain-brute`, module `bruteforce`): a
+  built-in wordlist plus permutations, with mandatory wildcard-DNS filtering.
+- **Subresource Integrity audit** (`--sri`, module `sri`): flags scripts and
+  stylesheets loaded without an `integrity` hash, distinguishing same-origin
+  from third-party resources.
+
+All ten are selectable by module name or alias (`-m dns-deep`, `-m email-auth`,
+`-m cloud-buckets`, `-m http-protocol`, `-m subdomain-brute`, ...).
+`-m full-recon` / `-m all` now run all 24 modules, and the new modules are
+folded into `-m active` and `-m passive` according to their request profile.
+
+**Libraries**
+
+- New runtime dependencies: `tldextract>=5.1` (BSD-3) for registrable-domain
+  parsing, `defusedxml>=0.7` (PSF) so untrusted XML (sitemaps,
+  `crossdomain.xml`) cannot trigger XXE or billion-laughs, and `h2>=4.1` (MIT)
+  so httpx can negotiate HTTP/2.
+- New optional `recon` extra - `wafw00f` (BSD-3), `pydnsbl` (MIT) and `pyasn`
+  (MIT) - each imported behind a guard, so a plain install is unaffected.
+
+### Fixed
+
+- **The `update` subcommand was unreachable.** The registered command was
+  shadowed by the variadic `targets` argument, so `python inoue.py update`
+  scanned the literal string "update" as a target instead of updating the
+  clone. It now dispatches, and `update --help` works.
+- **`--scope` could not authorise an IP-literal target.** A scope file entry
+  such as `127.0.0.1` (or a CIDR) parses as a network, not a domain, and the
+  scope gate only ever compared the hostname - so `--scope` refused
+  `http://127.0.0.1/` while allowing the very same server reached as
+  `http://localhost/`. The gate now accepts a target by name *or* by its
+  address, so an entry finally covers the address it names. Deny-always-wins
+  and the fail-closed handling of a missing/unreadable scope file are
+  unchanged.
+- **A completed NXDOMAIN for BIMI/TLS-RPT was reported as unknown.** Both
+  lookups returned early for any status other than "ok", so a query that
+  completed and found no record was reported as `present=None` ("the lookup did
+  not complete") instead of `present=False` (absent). That made the
+  "No BIMI record" and "No TLS-RPT record" findings unreachable, and disagreed
+  with how DMARC and MTA-STS already reported the identical input. Completed
+  and failed lookups are now distinguished for all four record types.
+- **BIMI logo and `vmc` URLs kept their trailing `;` separator.** The record is
+  semicolon-separated, so a value followed by another tag was returned as
+  `https://example.com/logo.svg;`. Tag values are now stripped of the separator
+  and any surrounding whitespace.
+- **The triage score could not see the new exposure findings.**
+  `core/risk.py` read `enriched["exposure"]` as a list of
+  `{"url", "status_code"}` rows - a shape the v2 exposure module never produces
+  (its payload is a dict of verified `findings` plus unverified `candidates`)
+  - so the `exposed_sensitive_file` factor (weight 25) could never fire however
+  many `.env` or `.git` disclosures were verified. The scorer now consumes both
+  shapes, counts verified file findings, and never lets an unverified candidate
+  move the score.
+- **A DNSSEC lookup timeout was reported as "not signed".** `_dnssec()`
+  derived the flag from whatever came back, so a DS/DNSKEY timeout produced
+  `dnssec_signed = False` - a definitive negative - while the same call recorded
+  "DNSSEC status is NOT established" in `errors`. It is now tri-state like
+  `caa_present`: `True` on material found, `False` only when every lookup
+  completed and found nothing, `None` when one failed - and the CLI renders that
+  as "unknown (lookup did not complete)" rather than "not signed".
+- **Cloud bucket probes over-claimed from ambiguous results.** A connect
+  *timeout* was treated as proof a name is not in use, and any status other than
+  200/403/404 (a 503, a 429, a WAF block) was reported as "name exists". Only a
+  clean 404 and a genuine name-resolution failure now mean "not in use"; a
+  timeout, an unexplained connect error, a bare 400 and any undefined status are
+  recorded in a new `unverified` list and asserted neither way.
+- **`--vhost` was inert against HTTPS-only targets.** The baseline used a
+  hardcoded `http://` URL, so an HTTPS-only host failed the baseline and every
+  candidate probe with it. The baseline is retried once over the other scheme
+  and the scheme that answered is used for every candidate (and reported in the
+  result), so the check costs at most one extra request.
+- **A comment on the SRI task claimed a network fetch.** The comment above
+  `_run_sri` said it "fetches each same-origin script/stylesheet"; `core/sri.py`
+  is a pure, offline analyser of the HTML already fetched. The comment now
+  matches the code (the nominal `(sri_timeout * 6) + 10` budget is noted as
+  symbolic, not a real network allowance).
+
+### Tests
+
+- `tests/test_recon_modules_v2.py` - 83 offline unit tests for the ten new
+  modules; the resolver and HTTP client are stubbed, so no test touches the
+  network.
+- `tests/test_flag_matrix.py` - an end-to-end matrix that runs every documented
+  CLI flag once, as a real subprocess, against a local fixture server, plus
+  checks that the discovered flag set and value-taking flags match what
+  `--help` advertises.
+- `tests/test_update_command.py` - 5 regression tests for the `update`
+  dispatch and its neighbouring subcommands.
+- Suite grew from 401 to 574 tests, 0 failures.
 
 ## 2.0.0
 

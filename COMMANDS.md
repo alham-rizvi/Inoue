@@ -382,6 +382,133 @@ every resolved IP. The `--whois` module now also does an IP/ASN WHOIS
 lookup via RDAP - who owns the network block the target's IP sits in, not
 just who owns the domain name.
 
+## Deep DNS records
+
+```bash
+python inoue.py --dns-deep <target>
+```
+
+Goes beyond the standard record set: CAA policies, DNSSEC (DS/DNSKEY presence),
+SRV service records, NS-to-IP resolution, wildcard-DNS detection (so a wildcard
+answer is never mistaken for real per-host records), and a read-only AXFR
+zone-transfer attempt against the target's own nameservers. DNS-only - no HTTP
+requests. An AXFR that is refused or times out is reported as unverified, never
+as "zone transfer not possible".
+
+## Email authentication posture
+
+```bash
+python inoue.py --email-auth <target>
+```
+
+BIMI (including logo and VMC URLs), TLS-RPT, the full MTA-STS policy document,
+extended DKIM selector probing with key-size estimation, fine-grained DMARC
+tags (`sp`, `aspf`, `adkim`, `ruf`, `fo`, `pct`), and a 0-100 score. DNS-only
+apart from the MTA-STS policy fetch. A record that is genuinely absent is
+reported as absent; a lookup that failed is reported as unknown, and the two
+are never conflated.
+
+## ASN and network intelligence
+
+```bash
+python inoue.py --asn <target>
+```
+
+Maps the target's IP to its ASN, announced BGP prefix, organisation, country,
+registry and allocation date using Team Cymru's DNS service - no API key. An
+optional local `pyasn` database (`pip install -e ".[recon]"`) cross-checks the
+answer offline when one is present.
+
+## IP reputation
+
+```bash
+python inoue.py --reputation <target>
+```
+
+Shodan InternetDB (keyless) for known ports, hostnames and vulnerabilities,
+plus DNS blocklist checks. The blocklist logic is refusal-aware: Spamhaus
+answers from `127.255.255.0/24` when it refuses a query, and that refusal is
+reported as *unverifiable* rather than as a clean listing. Timeouts are
+"unknown, not clean" for the same reason.
+
+## Cloud bucket enumeration
+
+```bash
+python inoue.py --cloud-buckets <target>
+```
+
+Derives candidate AWS S3, Google Cloud Storage and Azure Blob names from the
+domain and checks existence plus public-listing status. Existence is only
+asserted from a status the provider's own contract defines (a 200, a 403, or a
+400 carrying the provider's error document); a clean 404 means "not in use". A
+timeout, a connect error or an unexpected status (503, 429, a WAF block) reaches
+no verdict and is listed under `unverified` rather than being reported as an
+existing bucket. Every hit is content-verified, so a provider's generic "no such
+bucket" or catch-all page is never reported as a live bucket. This sends
+requests to those third-party providers, not to the target.
+
+## Exposure sweep
+
+```bash
+python inoue.py --exposure <target>
+```
+
+Probes a fixed, curated list of sensitive paths - `.git`, `.env`, backup and
+dump patterns, `phpinfo`, `.well-known/security.txt`, `crossdomain.xml`,
+JavaScript source maps - and content-verifies every 200 response before
+reporting it. A catch-all/soft-404 responder (one that returns 200 for
+everything) therefore produces no findings. `security.txt` and
+`crossdomain.xml` are parsed for the information they legitimately expose.
+
+## HTTP protocol capability
+
+```bash
+python inoue.py --http-protocol <target>
+```
+
+Reports the HTTP version actually negotiated, HTTP/2 support, HTTP/3
+advertisement via `Alt-Svc`, compression and `Server-Timing`. `Alt-Svc`,
+compression and `Server-Timing` come from the response already fetched; the
+negotiated version and TLS protocol are read from one additional request to the
+target. A single HTTP/1.1 result never records HTTP/2 as unsupported - it only
+reports what was observed.
+
+## Virtual-host discovery
+
+```bash
+python inoue.py --vhost <target>
+```
+
+Sends requests to the target's IP with a set of candidate `Host` headers and
+keeps only the responses that differ from the baseline response, so a shared
+default vhost is not reported as a finding. The scheme is detected from the
+baseline - if `http://` does not answer it is retried once over `https://` - and
+the scheme that answered is used for every candidate and reported as `scheme`,
+so an HTTPS-only host is still reachable.
+
+## Subdomain bruteforce
+
+```bash
+python inoue.py --subdomain-brute <target>
+```
+
+Works through a built-in wordlist plus common permutations, with wildcard-DNS
+detection enforced first: if the zone answers for every name, the wildcard is
+reported and the brute-force results are filtered rather than flooding the
+output with false positives. This sends many DNS queries.
+
+## Subresource Integrity audit
+
+```bash
+python inoue.py --sri <target>
+```
+
+Audits the fetched page's `<script>` and `<link rel=stylesheet>` elements:
+external resources loaded without an `integrity` hash, and resources that have
+one but lack `crossorigin`. Third-party resources are scored as higher severity
+than same-origin ones, since a compromised CDN is the threat model SRI exists
+for.
+
 ## Crawl mode
 
 ```bash
@@ -634,6 +761,11 @@ Fetch and apply the latest fingerprints, scanner improvements, and catalog updat
 ```bash
 python inoue.py update
 ```
+
+`update` is dispatched as its own subcommand. Before v2.1 it was shadowed by
+the positional `targets` argument, so the word "update" was scanned as a target
+instead of running the update; `python inoue.py update --help` now prints the
+subcommand's own options.
 
 This command:
 1. Runs `git fetch --all --prune` to pull all remote changes
